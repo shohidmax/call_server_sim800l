@@ -117,6 +117,36 @@
                     </div>
                 </div>
 
+                <!-- Hardware Telemetry Board -->
+                <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
+                    <h3 class="text-lg font-semibold mb-4 text-slate-800 flex justify-between items-center">
+                        <span><i class="fa-solid fa-server text-indigo-500 mr-2"></i> ESP32 Hardware Health</span>
+                        <span id="hw-status-badge" class="px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-semibold"><i class="fa-solid fa-spinner fa-spin mr-1"></i> Waiting...</span>
+                    </h3>
+                    <div class="grid grid-cols-2 md:grid-cols-3 gap-6">
+                        <div>
+                            <p class="text-xs text-slate-500 font-medium uppercase tracking-wider mb-1">Wi-Fi IP</p>
+                            <p id="hw-ip" class="text-base font-semibold text-slate-800 font-mono">--.---.--.--</p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-slate-500 font-medium uppercase tracking-wider mb-1">MAC Address</p>
+                            <p id="hw-mac" class="text-base font-semibold text-slate-800 font-mono">--:--:--:--:--:--</p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-slate-500 font-medium uppercase tracking-wider mb-1">Wi-Fi Signal</p>
+                            <p id="hw-wifi" class="text-base font-semibold text-slate-800">-- dBm</p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-slate-500 font-medium uppercase tracking-wider mb-1">SIM Operator</p>
+                            <p id="hw-op" class="text-base font-semibold text-slate-800">Searching...</p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-slate-500 font-medium uppercase tracking-wider mb-1">SIM Signal</p>
+                            <p id="hw-sim-sig" class="text-base font-semibold text-slate-800">--%</p>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
                     <h3 class="text-lg font-semibold mb-4 text-slate-800">System Overview</h3>
                     <p class="text-slate-600 leading-relaxed">
@@ -262,6 +292,28 @@
                 renderSmsTable(liveSms);
                 document.getElementById('stat-sms-total').innerText = liveSms.length;
             }
+        });
+
+        // Listen for hardware telemetry from ESP32
+        socket.on('telemetry_update', (data) => {
+            if (usingMockData) return;
+            
+            document.getElementById('hw-status-badge').className = "px-3 py-1 rounded-full bg-green-100 text-green-700 text-xs font-semibold";
+            document.getElementById('hw-status-badge').innerHTML = '<i class="fa-solid fa-wifi mr-1"></i> Online';
+            
+            document.getElementById('hw-ip').innerText = data.ip;
+            document.getElementById('hw-mac').innerText = data.mac;
+            document.getElementById('hw-wifi').innerText = `${data.wifi_rssi} dBm`;
+            document.getElementById('hw-op').innerText = data.sim_operator;
+            document.getElementById('hw-sim-sig').innerText = data.sim_signal;
+            
+            // Auto offline detection timeout
+            clearTimeout(window.telemetryTimer);
+            window.telemetryTimer = setTimeout(() => {
+                document.getElementById('hw-status-badge').className = "px-3 py-1 rounded-full bg-red-100 text-red-700 text-xs font-semibold";
+                document.getElementById('hw-status-badge').innerHTML = '<i class="fa-solid fa-link-slash mr-1"></i> Offline';
+                document.getElementById('hw-op').innerText = 'Offline';
+            }, 12000); // 12s grace period due to 10s interval
         });
 
         // --- Mock Data (Fallback if Node backend is offline) ---

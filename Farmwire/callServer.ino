@@ -20,6 +20,8 @@ bool isSimBusy = false; // Prevents command collisions
 // --- BACKEND SERVER SETTINGS ---
 String backendServer = "https://800lcall.espserver.site"; 
 String macAddress = "";
+unsigned long lastTelemetryTime = 0;
+const unsigned long telemetryInterval = 10000; // 10 seconds
 
 SocketIOclient socketIO;
 
@@ -274,6 +276,53 @@ String sendATCommand(String cmd, uint32_t timeout) {
     if(response.indexOf("OK") != -1 || response.indexOf("ERROR") != -1) break;
   }
   return response;
+}
+
+// --- HELPER FUNCTION: Send Tracking Telemetry ---
+void sendTelemetry() {
+  if (isSimBusy || WiFi.status() != WL_CONNECTED) return;
+  
+  isSimBusy = true; // Briefly lock to prevent call collision
+  
+  // 1. Get Operator Name (AT+COPS?)
+  String opName = "Searching...";
+  String copsRes = sendATCommand("AT+COPS?", 1500);
+  int startQuote = copsRes.indexOf('"');
+  int endQuote = copsRes.indexOf('"', startQuote + 1);
+  if (startQuote != -1 && endQuote != -1) {
+    opName = copsRes.substring(startQuote + 1, endQuote);
+  }
+
+  // 2. Get Signal Strength (AT+CSQ)
+  String sigStr = "0%";
+  String csqRes = sendATCommand("AT+CSQ", 1500);
+  int csqIdx = csqRes.indexOf("+CSQ: ");
+  if (csqIdx != -1) {
+    int commaIdx = csqRes.indexOf(',', csqIdx);
+    if(commaIdx != -1) {
+      int csqVal = csqRes.substring(csqIdx + 6, commaIdx).toInt();
+      if (csqVal == 99) sigStr = "No Signal";
+      else sigStr = String((csqVal * 100) / 31) + "%"; 
+    }
+  }
+  
+  isSimBusy = false;
+
+  // Emit to socket
+  DynamicJsonDocument doc(256);
+  JsonArray array = doc.to<JsonArray>();
+  array.add("esp32_telemetry");
+  
+  JsonObject payload = array.createNestedObject();
+  payload["mac"] = macAddress;
+  payload["ip"] = WiFi.localIP().toString();
+  payload["wifi_rssi"] = WiFi.RSSI();
+  payload["sim_operator"] = opName;
+  payload["sim_signal"] = sigStr;
+  
+  String output;
+  serializeJson(doc, output);
+  socketIO.sendEVENT(output);
 }
 
 // --- HELPER FUNCTION: Handle Socket.IO Events ---
@@ -557,4 +606,9 @@ void loop() {
 
   // Handle ongoing Socket.IO connection
   socketIO.loop();
+
+  if (millis() - lastTelemetryTime >= telemetryInterval) {
+    lastTelemetryTime = millis();
+    sendTelemetry();
+  }
 }

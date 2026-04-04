@@ -28,6 +28,11 @@ io.on('connection', (socket) => {
         }
     });
 
+    // ESP32 Telemetry Relay
+    socket.on('esp32_telemetry', (data) => {
+        io.emit('telemetry_update', data);
+    });
+
     // ESP32 reports call result
     socket.on('call_result', async (data) => {
         const { job_id, status } = data;

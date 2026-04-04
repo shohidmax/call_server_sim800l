@@ -1,0 +1,53 @@
+# Project API Documentation
+Base URL: https://800lcall.espserver.site
+
+## REST Endpoints
+
+1. `GET /`
+   - Purpose: Health check to ping the backend server.
+   
+2. `POST /api/sms`
+   - Payload: `{ sender, message, timestamp }`
+   - Purpose: ESP32 or external source sends SMS data here to be saved into MongoDB. Triggers a real-time emit to Dasbhoards.
+
+3. `GET /api/sms`
+   - Purpose: Fetch array of all stored SMS messages from MongoDB.
+
+4. `POST /api/broadcast`
+   - Payload: `{ user_id, phone, mac, phone_call_list, payload, response }`
+   - Purpose: Master route for initiating a voice call broadcast. Will save the parent log and queue individual `EspJob` child records targeting a specific `mac` address.
+
+5. `GET /api/jobs`
+   - Purpose: Fetch up to 100 recent broadcast call jobs. Used by the dashboard upon initial loading.
+
+## Socket.IO Events
+
+### ESP32 -> Server
+1. `esp32_register` 
+   - Payload: `{ mac }`
+   - Maps the ESP32 connection socket directly to its MAC address for targeted commands.
+   
+2. `esp32_telemetry` 
+   - Payload: `{ mac, ip, wifi_rssi, sim_operator, sim_signal }`
+   - Fired every 10 seconds by the ESP32 heartbeat to inform the server of its hardware state.
+
+3. `call_result`
+   - Payload: `{ job_id, status: 'success' | 'fail' }`
+   - Emitted by the ESP32 when a voice call job finishes.
+
+### Server -> ESP32
+4. `execute_call` 
+   - Payload: `{ job_id, phone_to_call }`
+   - Targeted push to a specific ESP32. Tells the SIM800L module to start dialing `phone_to_call`.
+
+### Server -> Dashboard
+5. `dashboard_update`
+   - Relays state changes in jobs.
+   - Types: `new_jobs` or `job_update`.
+   
+6. `sms_update`
+   - Types: `new_sms`. Relays newly stored SMS messages.
+   
+7. `telemetry_update`
+   - Payload: `{ mac, ip, wifi_rssi, sim_operator, sim_signal }`
+   - Direct pass-through of `esp32_telemetry` so the HTML dashboard can view live hardware health.
