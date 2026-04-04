@@ -1,0 +1,21 @@
+{
+  "name": "sim800l-esp32-backend",
+  "version": "1.0.0",
+  "description": "Node.js API and job queue for ESP32 with SIM800L",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "mongoose": "^8.7.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
+  },
+  "author": "",
+  "license": "ISC"
+}
