@@ -3,6 +3,7 @@
 #include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
 #include <HTTPClient.h>  // Added for server communication
 #include <ArduinoJson.h> // Added for parsing JSON from server
+#include <SocketIOclient.h> // Socket.IO client for realtime events
 
 // --- PIN DEFINITIONS ---
 #define SIM800L_RX 16 // ESP32 RX2 (Connects to SIM800L TX)
@@ -17,11 +18,10 @@ WebServer server(80);
 bool isSimBusy = false; // Prevents command collisions
 
 // --- BACKEND SERVER SETTINGS ---
-// IMPORTANT: Change this to your computer's local IP address where Node.js is running
-String backendServer = "http://192.168.1.100:3000"; 
+String backendServer = "https://800lcall.espserver.site"; 
 String macAddress = "";
-unsigned long lastPollTime = 0;
-const unsigned long pollInterval = 5000; // Check for new calls every 5 seconds
+
+SocketIOclient socketIO;
 
 // --- HTML DASHBOARD (Stored in flash memory) ---
 const char index_html[] PROGMEM = R"rawliteral(
@@ -276,80 +276,107 @@ String sendATCommand(String cmd, uint32_t timeout) {
   return response;
 }
 
-// --- HELPER FUNCTION: Poll Server for Calls ---
-void checkServerForJobs() {
-  if (WiFi.status() != WL_CONNECTED || isSimBusy) return;
-
-  HTTPClient http;
-  String url = backendServer + "/api/esp32/pending-calls/" + macAddress;
-  
-  http.begin(url);
-  int httpCode = http.GET();
-
-  if (httpCode == 200) {
-    String payload = http.getString();
+// --- HELPER FUNCTION: Handle Socket.IO Events ---
+void socketIOEvent(socketIOmessageType_t type, uint8_t * payload, size_t length) {
+  switch(type) {
+    case sIOtype_DISCONNECT:
+      Serial.printf("[IOc] Disconnected!\n");
+      break;
     
-    // Parse JSON
-    DynamicJsonDocument doc(512);
-    DeserializationError error = deserializeJson(doc, payload);
-    
-    if (!error && doc["has_job"] == true) {
-      String jobId = doc["job_id"].as<String>();
-      String phone = doc["phone_to_call"].as<String>();
+    case sIOtype_CONNECT:
+      Serial.printf("[IOc] Connected to url: %s\n", payload);
+      // join default namespace (no auto join in Socket.IO v3)
+      socketIO.send(sIOtype_CONNECT, "/");
 
-      Serial.println("\n[SERVER JOB] New call requested: " + phone);
-      isSimBusy = true;
+      // Register MAC with server
+      {
+        DynamicJsonDocument doc(256);
+        JsonArray array = doc.to<JsonArray>();
+        array.add("esp32_register");
+        JsonObject param1 = array.createNestedObject();
+        param1["mac"] = macAddress;
+        
+        String output;
+        serializeJson(doc, output);
+        socketIO.sendEVENT(output);
+        Serial.println("[IOc] Sent esp32_register event");
+      }
+      break;
       
-      // Clear SIM buffer
-      while(sim800l.available()) sim800l.read();
-      
-      // Make the call
-      sim800l.print("ATD");
-      sim800l.print(phone);
-      sim800l.println(";");
-      
-      bool callFailed = false;
-      unsigned long callStart = millis();
-      String simResponse = "";
-      
-      // Wait 15 seconds for the call to ring/complete
-      // We also monitor if the carrier instantly drops it (BUSY, NO CARRIER)
-      Serial.println("Dialing... waiting 15 seconds...");
-      while(millis() - callStart < 15000) {
-        while(sim800l.available()) {
-          char c = sim800l.read();
-          simResponse += c;
-          Serial.write(c);
-        }
-        if(simResponse.indexOf("BUSY") != -1 || simResponse.indexOf("NO CARRIER") != -1 || simResponse.indexOf("ERROR") != -1) {
-          callFailed = true;
-          break;
+    case sIOtype_EVENT:
+      {
+        Serial.printf("[IOc] get event: %s\n", payload);
+        
+        // Parse incoming JSON
+        DynamicJsonDocument doc(1024);
+        DeserializationError error = deserializeJson(doc, payload);
+        
+        if (!error) {
+          const char* eventName = doc[0];
+          if (strcmp(eventName, "execute_call") == 0 && !isSimBusy) {
+            String jobId = doc[1]["job_id"].as<String>();
+            String phone = doc[1]["phone_to_call"].as<String>();
+            
+            Serial.println("\n[SERVER JOB] New call requested: " + phone);
+            isSimBusy = true;
+            
+            // Clear SIM buffer
+            while(sim800l.available()) sim800l.read();
+            
+            // Make the call
+            sim800l.print("ATD");
+            sim800l.print(phone);
+            sim800l.println(";");
+            
+            bool callFailed = false;
+            unsigned long callStart = millis();
+            String simResponse = "";
+            
+            // Wait 15 seconds for the call to ring/complete
+            Serial.println("Dialing... waiting 15 seconds...");
+            while(millis() - callStart < 15000) {
+              while(sim800l.available()) {
+                char c = sim800l.read();
+                simResponse += c;
+                Serial.write(c);
+              }
+              if(simResponse.indexOf("BUSY") != -1 || simResponse.indexOf("NO CARRIER") != -1 || simResponse.indexOf("ERROR") != -1) {
+                callFailed = true;
+                break;
+              }
+            }
+            
+            // Hang up
+            sim800l.println("ATH");
+            delay(1000);
+            while(sim800l.available()) Serial.write(sim800l.read()); // flush remaining data
+            
+            isSimBusy = false;
+            String resultStatus = callFailed ? "fail" : "success";
+            Serial.println("\n[SERVER JOB] Call finished. Status: " + resultStatus);
+
+            // Report result back to server via Socket.io
+            DynamicJsonDocument resDoc(256);
+            JsonArray resArray = resDoc.to<JsonArray>();
+            resArray.add("call_result");
+            JsonObject resObj = resArray.createNestedObject();
+            resObj["job_id"] = jobId;
+            resObj["status"] = resultStatus;
+            
+            String resOutput;
+            serializeJson(resDoc, resOutput);
+            socketIO.sendEVENT(resOutput);
+            Serial.println("[SERVER JOB] Result reported via WebSocket.");
+          }
         }
       }
-      
-      // Hang up
-      sim800l.println("ATH");
-      delay(1000);
-      while(sim800l.available()) Serial.write(sim800l.read()); // flush remaining data
-      
-      isSimBusy = false;
-      String resultStatus = callFailed ? "fail" : "success";
-      Serial.println("\n[SERVER JOB] Call finished. Status: " + resultStatus);
-
-      // Report result back to server
-      http.begin(backendServer + "/api/esp32/call-result");
-      http.addHeader("Content-Type", "application/json");
-      String postData = "{\"job_id\":\"" + jobId + "\",\"status\":\"" + resultStatus + "\"}";
-      int postCode = http.POST(postData);
-      
-      if(postCode > 0) {
-        Serial.println("[SERVER JOB] Result reported to server successfully.");
-      } else {
-        Serial.println("[SERVER JOB] Error reporting to server: " + http.errorToString(postCode));
-      }
-    }
+      break;
+    case sIOtype_ACK:
+    case sIOtype_ERROR:
+    case sIOtype_BINARY_EVENT:
+    case sIOtype_BINARY_ACK:
+      break;
   }
-  http.end();
 }
 
 
@@ -505,6 +532,13 @@ void setup() {
   // Start the server
   server.begin();
   
+  // 4. Initialize Socket.IO connection
+  // Ensure "800lcall.espserver.site" proxy supports wss.
+  String host = "800lcall.espserver.site";
+  socketIO.beginSSL(host, 443, "/socket.io/?EIO=4");
+  socketIO.onEvent(socketIOEvent);
+
+  
   // 4. Initialize SIM800L basic settings
   delay(3000); // Give SIM module time to register to network
   sim800l.println("AT"); // Wake up/Handshake
@@ -521,9 +555,6 @@ void loop() {
     Serial.write(sim800l.read());
   }
 
-  // Poll the Node.js server every 5 seconds
-  if (millis() - lastPollTime >= pollInterval) {
-    lastPollTime = millis();
-    checkServerForJobs();
-  }
+  // Handle ongoing Socket.IO connection
+  socketIO.loop();
 }

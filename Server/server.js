@@ -5,7 +5,87 @@ const cors = require('cors');
 
 // Initialize Express App
 const app = express();
+const http = require('http');
+const { Server } = require('socket.io');
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: '*' } });
 const PORT = process.env.PORT || 3000;
+
+// Socket.IO Logic
+const connectedESP32s = new Map();
+
+io.on('connection', (socket) => {
+    console.log(`🔌 New client connected: ${socket.id}`);
+
+    // ESP32 Registration
+    socket.on('esp32_register', (data) => {
+        const mac = data.mac;
+        if (mac) {
+            connectedESP32s.set(mac, socket.id);
+            console.log(`✅ ESP32 registered with MAC: ${mac} on socket: ${socket.id}`);
+            // Trigger next job if any exist when it re/connects
+            sendNextJobToESP32(mac);
+        }
+    });
+
+    // ESP32 reports call result
+    socket.on('call_result', async (data) => {
+        const { job_id, status } = data;
+        if (!job_id || !status) return;
+
+        try {
+            const updatedJob = await EspJob.findByIdAndUpdate(job_id, { status }, { new: true });
+            console.log(`📞 Call Result for ${updatedJob?.phone || 'unknown'}: ${status.toUpperCase()}`);
+            
+            // Notify dashboards
+            io.emit('dashboard_update', { type: 'job_update', job: updatedJob });
+
+            // Fetch and send the next job for this ESP32
+            if (updatedJob && updatedJob.mac) {
+                sendNextJobToESP32(updatedJob.mac);
+            }
+        } catch (error) {
+            console.error('Error handling call_result via socket:', error);
+        }
+    });
+
+    socket.on('disconnect', () => {
+        console.log(`❌ Client disconnected: ${socket.id}`);
+        for (const [mac, id] of connectedESP32s.entries()) {
+            if (id === socket.id) {
+                connectedESP32s.delete(mac);
+                console.log(`🔻 ESP32 MAC ${mac} disconnected`);
+                break;
+            }
+        }
+    });
+});
+
+// Helper function to send next job via Socket
+async function sendNextJobToESP32(mac) {
+    const espSocketId = connectedESP32s.get(mac);
+    if (!espSocketId) return;
+
+    try {
+        const pendingJob = await EspJob.findOneAndUpdate(
+            { mac: mac, status: 'pending' },
+            { status: 'calling' },
+            { new: true }
+        );
+
+        if (pendingJob) {
+            io.to(espSocketId).emit('execute_call', {
+                job_id: pendingJob._id,
+                phone_to_call: pendingJob.phone
+            });
+            io.emit('dashboard_update', { type: 'job_update', job: pendingJob });
+            console.log(`⏳ Pushed job ${pendingJob._id} to ESP32 ${mac}`);
+        }
+    } catch (e) {
+        console.error('Error sending next job to ESP32:', e);
+    }
+}
+
 
 // Middleware
 app.use(cors()); // Allow cross-origin requests
@@ -14,7 +94,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // --- MongoDB Connection ---
 // Default to local MongoDB if URI is not provided in .env
-const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://sarwarjahanshohid_db_trans:OXAqtShYSdEIbBXG@transformer.7b8ec5a.mongodb.net/?appName=transformer';
+const MONGO_URI = process.env.MONGO_URI || 'ffffff';
 
 mongoose.connect(MONGO_URI)
     .then(() => console.log('✅ Connected to MongoDB successfully!'))
@@ -79,6 +159,7 @@ app.post('/api/sms', async (req, res) => {
         const savedSms = await newSms.save();
 
         console.log(`📩 New SMS saved from ${sender}`);
+        io.emit('sms_update', { type: 'new_sms', sms: savedSms }); // Real-time emit
         res.status(201).json({ success: true, data: savedSms });
     } catch (error) {
         console.error('Error saving SMS:', error);
@@ -116,7 +197,13 @@ app.post('/api/broadcast', async (req, res) => {
                 phone: num,
                 status: 'pending'
             }));
-            await EspJob.insertMany(jobsToCreate);
+            const insertedJobs = await EspJob.insertMany(jobsToCreate);
+            
+            // Send newly created jobs to all dashboards
+            io.emit('dashboard_update', { type: 'new_jobs', jobs: insertedJobs });
+
+            // Push first pending job directly to the specific ESP32
+            sendNextJobToESP32(mac);
         }
 
         console.log(`📡 Broadcast saved & calls queued for MAC: ${mac}`);
@@ -184,7 +271,17 @@ app.post('/api/esp32/call-result', async (req, res) => {
     }
 });
 
+// 7. GET Route: Fetch all pending & recent jobs for dashboard initialization
+app.get('/api/jobs', async (req, res) => {
+    try {
+        const jobs = await EspJob.find().sort({ createdAt: -1 }).limit(100);
+        res.status(200).json({ success: true, data: jobs });
+    } catch(err) {
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 // --- Start Server ---
-app.listen(PORT, () => {
+server.listen(PORT, () => {
     console.log(`🚀 Server is running on http://localhost:${PORT}`);
 });

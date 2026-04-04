@@ -11,6 +11,9 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
+    <!-- Socket.IO Client -->
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     
@@ -222,8 +225,44 @@
     <!-- App Logic -->
     <script>
         // CONFIGURATION
-        const API_BASE = 'http://localhost:3000/api';
+        const API_BASE = 'https://800lcall.espserver.site/api';
         let usingMockData = false;
+        let liveJobs = []; // Local tracking
+        let liveSms = []; // Local tracking
+
+        // --- Socket.IO Setup ---
+        const socket = io('https://800lcall.espserver.site');
+
+        socket.on('connect', () => {
+            console.log("Connected to WebSocket Server");
+        });
+
+        socket.on('dashboard_update', (data) => {
+            if (usingMockData) return;
+            
+            if (data.type === 'new_jobs') {
+                liveJobs = [...data.jobs, ...liveJobs];
+            } else if (data.type === 'job_update') {
+                const index = liveJobs.findIndex(j => j._id === data.job._id);
+                if (index !== -1) {
+                    liveJobs[index] = data.job; // Update existing
+                } else {
+                    liveJobs.unshift(data.job); // Add if new
+                }
+            }
+            renderQueueTable(liveJobs);
+            updateStats(liveJobs, liveSms);
+        });
+
+        socket.on('sms_update', (data) => {
+            if (usingMockData) return;
+            
+            if (data.type === 'new_sms') {
+                liveSms.unshift(data.sms);
+                renderSmsTable(liveSms);
+                document.getElementById('stat-sms-total').innerText = liveSms.length;
+            }
+        });
 
         // --- Mock Data (Fallback if Node backend is offline) ---
         const mockJobs = [
@@ -315,21 +354,34 @@
         }
 
         async function fetchRealData() {
-            // 1. Fetch SMS (Route exists in server.js)
+            // 1. Fetch SMS
             try {
                 const smsRes = await fetch(`${API_BASE}/sms`);
                 const smsData = await smsRes.json();
                 if(smsData.success) {
-                    renderSmsTable(smsData.data);
-                    document.getElementById('stat-sms-total').innerText = smsData.data.length;
+                    liveSms = smsData.data;
+                    renderSmsTable(liveSms);
+                    document.getElementById('stat-sms-total').innerText = liveSms.length;
                 }
             } catch (e) { console.error("Error fetching SMS", e); }
 
-            // 2. We don't have a GET /jobs route in the current server.js.
-            // In a real scenario, you'd add one. For the UI, if usingMockData is false but route fails,
-            // we will just show an empty array or mock jobs to keep the UI looking nice.
-            renderQueueTable(mockJobs); // Showing mock jobs because backend lacks a GET ALL route for jobs
-            updateStats(mockJobs, mockSms);
+            // 2. Fetch Jobs
+            try {
+                const jobRes = await fetch(`${API_BASE}/jobs`);
+                const jobData = await jobRes.json();
+                if (jobData.success) {
+                    liveJobs = jobData.data;
+                    renderQueueTable(liveJobs);
+                } else {
+                    liveJobs = mockJobs;
+                    renderQueueTable(liveJobs);
+                }
+            } catch (e) {
+                console.error("Error fetching Jobs", e);
+                liveJobs = mockJobs;
+                renderQueueTable(liveJobs);
+            }
+            updateStats(liveJobs, liveSms);
         }
 
         function renderQueueTable(jobs) {
@@ -458,8 +510,7 @@
         // Initialize
         window.onload = () => {
             fetchData();
-            // Auto refresh every 10 seconds to keep dashboard live
-            setInterval(fetchData, 10000); 
+            // HTTP Polling removed, using real-time Socket.IO instead 🚀
         };
     </script>
 </body>
