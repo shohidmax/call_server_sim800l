@@ -1,53 +1,108 @@
 # Project API Documentation
 Base URL: https://800lcall.espserver.site
 
-## REST Endpoints
+## 🌐 HTTP REST Endpoints
 
 1. `GET /`
    - Purpose: Health check to ping the backend server.
-   
+   - Example Response: `ESP32 SIM800L Backend Server is running!`
+
 2. `POST /api/sms`
-   - Payload: `{ sender, message, timestamp }`
-   - Purpose: ESP32 or external source sends SMS data here to be saved into MongoDB. Triggers a real-time emit to Dasbhoards.
+   - Purpose: ESP32 or external source sends SMS data here to be saved into MongoDB.
+   - Example Payload: 
+     ```json
+     { 
+       "sender": "+8801700000000", 
+       "message": "Warning: Unauthorized entry detected.", 
+       "timestamp": "24/04/05,07:35:00+24" 
+     }
+     ```
+   - Example Response:
+     ```json
+     {
+       "success": true,
+       "data": { "_id": "60a7c...", "sender": "+880...", ... }
+     }
+     ```
 
 3. `GET /api/sms`
    - Purpose: Fetch array of all stored SMS messages from MongoDB.
+   - Example Response:
+     ```json
+     {
+       "success": true,
+       "count": 1,
+       "data": [
+         {
+           "_id": "664fa822",
+           "sender": "+8801700000000",
+           "message": "Hello",
+           "direction": "in",
+           "receivedAt": "2026-04-05T01:34:00.000Z"
+         }
+       ]
+     }
+     ```
 
 4. `POST /api/broadcast`
-   - Payload: `{ user_id, phone, mac, phone_call_list, payload, response }`
-   - Purpose: Master route for initiating a voice call broadcast. Will save the parent log and queue individual `EspJob` child records targeting a specific `mac` address.
+   - Purpose: Master route for initiating a voice call broadcast to multiple numbers. Queues `EspJob` child records targeting a specific `mac` address.
+   - Example Payload:
+     ```json
+     { 
+       "user_id": "user123", 
+       "mac": "24:0A:C4:AA:BB:CC",
+       "phone": "Main Office",
+       "phone_call_list": ["+8801711111111", "+8801922222222"], 
+       "payload": { "address": "Farm 3", "message": "Theft alarm" },
+       "response": [] 
+     }
+     ```
 
 5. `GET /api/jobs`
-   - Purpose: Fetch up to 100 recent broadcast call jobs. Used by the dashboard upon initial loading.
+   - Purpose: Fetch up to 100 recent broadcast call jobs (used by the dashboard).
 
-## Socket.IO Events
+---
 
-### ESP32 -> Server
-1. `esp32_register` 
-   - Payload: `{ mac }`
-   - Maps the ESP32 connection socket directly to its MAC address for targeted commands.
-   
-2. `esp32_telemetry` 
-   - Payload: `{ mac, ip, wifi_rssi, sim_operator, sim_signal }`
-   - Fired every 10 seconds by the ESP32 heartbeat to inform the server of its hardware state.
+## ⚡ Socket.IO Events (Bidirectional Real-Time JSON)
 
-3. `call_result`
-   - Payload: `{ job_id, status: 'success' | 'fail' }`
-   - Emitted by the ESP32 when a voice call job finishes.
+### 📌 Dashboard -> Server
+1. `dashboard_cmd_dial`
+   - Make the ESP32 dial a specific number immediately.
+   - Payload: `{ "mac": "24:0A:C4:AA:BB:CC", "phone": "+8801700000000" }`
+2. `dashboard_cmd_hangup`
+   - Hang up any ongoing calls.
+   - Payload: `{ "mac": "24:0A:C4:AA:BB:CC" }`
+3. `dashboard_cmd_ussd`
+   - Query balance/USSD codes.
+   - Payload: `{ "mac": "24:0A:C4:AA:BB:CC", "code": "*121#" }`
+4. `dashboard_send_sms`
+   - Sends a text message directly through the SIM800L.
+   - Payload: `{ "mac": "24:0A:C4:AA...", "phone": "+88017...", "message": "Test SMS" }`
+5. `dashboard_cmd_flightmode`
+   - Toggles minimum functionality.
+   - Payload: `{ "mac": "24:0A:C4:AA...", "state": true }`
+6. `dashboard_cmd_reboot`
+   - Reboots the ESP32.
+   - Payload: `{ "mac": "24:0A:C4:AA..." }`
 
-### Server -> ESP32
-4. `execute_call` 
-   - Payload: `{ job_id, phone_to_call }`
-   - Targeted push to a specific ESP32. Tells the SIM800L module to start dialing `phone_to_call`.
-
-### Server -> Dashboard
-5. `dashboard_update`
-   - Relays state changes in jobs.
-   - Types: `new_jobs` or `job_update`.
-   
-6. `sms_update`
-   - Types: `new_sms`. Relays newly stored SMS messages.
-   
+### 📌 Server -> Dashboard
 7. `telemetry_update`
-   - Payload: `{ mac, ip, wifi_rssi, sim_operator, sim_signal }`
-   - Direct pass-through of `esp32_telemetry` so the HTML dashboard can view live hardware health.
+   - Live hardware status (relayed every 10 sec).
+   - Payload: `{ "mac": "24:0A:C4:AA", "ip": "192.168.1.10", "wifi_rssi": -55, "sim_operator": "Grameenphone", "sim_signal": "80%", "sim_number": "+8801..." }`
+8. `dashboard_cmd_result`
+   - Responses to manual commands (e.g., USSD balance return).
+   - Payload: `{ "type": "ussd", "data": "+CUSD: 0, \"Balance is 50.00 Tk\", 15" }`
+9. `sms_update`
+   - Informs dashboard that a new SMS was just saved in DB.
+   - Payload: `{ "type": "new_sms", "sms": { ... DB Object ... } }`
+
+### 📌 ESP32 Hardware <-> Server
+10. `esp32_register` (Hardware -> Server)
+   - Payload: `{ "mac": "24:0A:C4:AA:BB:CC" }`
+11. `esp32_telemetry` (Hardware -> Server)
+   - Payload: Same as `telemetry_update`.
+12. `esptarget_cmd_*` events (Server -> Hardware)
+    - Routes `dashboard_cmd` triggers specifically to the mapped MAC address targeting the physical hardware. Includes `dial`, `hangup`, `ussd`, `sendsms`, `flightmode`, and `reboot`.
+13. `hardware_incoming_sms` (Hardware -> Server)
+    - Triggers instantly when SIM800L receives a new SMS text.
+    - Payload: `{ "sender": "+8801...", "message": "Hi Admin", "timestamp": "-" }`

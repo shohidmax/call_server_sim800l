@@ -17,10 +17,15 @@ WebServer server(80);
 
 bool isSimBusy = false; // Prevents command collisions
 
+// --- BACKEND SERVER SETTINGS ---
+String backendServer = "https://800lcall.espserver.site"; 
+String macAddress = "";
+
 unsigned long lastTelemetryTime = 0;
 const unsigned long telemetryInterval = 10000; // 10 seconds
 
 String simBuffer = ""; // Global buffer for tracking spontaneous serial events like SMS
+String simPhoneNumber = "Unknown"; // Global variable fetched on boot
 
 SocketIOclient socketIO;
 
@@ -318,6 +323,7 @@ void sendTelemetry() {
   payload["wifi_rssi"] = WiFi.RSSI();
   payload["sim_operator"] = opName;
   payload["sim_signal"] = sigStr;
+  payload["sim_number"] = simPhoneNumber;
   
   String output;
   serializeJson(doc, output);
@@ -417,6 +423,23 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t * payload, size_t length)
             delay(100);
             sim800l.write(26); // ^Z
             isSimBusy = false;
+          }
+          else if (strcmp(eventName, "esptarget_cmd_flightmode") == 0 && !isSimBusy) {
+            bool turnOn = doc[1]["state"].as<bool>();
+            isSimBusy = true;
+            if(turnOn) {
+              Serial.println("[MANUAL] Flight Mode ON");
+              sim800l.println("AT+CFUN=4");
+            } else {
+              Serial.println("[MANUAL] Flight Mode OFF");
+              sim800l.println("AT+CFUN=1");
+            }
+            isSimBusy = false;
+          }
+          else if (strcmp(eventName, "esptarget_cmd_reboot") == 0) {
+            Serial.println("[MANUAL] REBOOTING ESP32 System...");
+            delay(500);
+            ESP.restart();
           }
           else if (strcmp(eventName, "execute_call") == 0 && !isSimBusy) {
             String jobId = doc[1]["job_id"].as<String>();
@@ -651,6 +674,37 @@ void setup() {
   sim800l.println("AT+CMGF=1"); // Set to text mode
   delay(100);
   sim800l.println("AT+CNMI=2,2,0,0,0"); // Deliver SMS immediately directly on serial
+  
+  // 5. Fetch SIM Phone Number safely by polling the Local Operator MSISDN query
+  Serial.println("Identifying SIM Phone Number...");
+  sim800l.println("AT+CUSD=1,\"*2#\",15");
+  unsigned long msStart = millis();
+  String ussdRes = "";
+  while(millis() - msStart < 15000) {
+    while(sim800l.available()) {
+      char c = sim800l.read();
+      ussdRes += c;
+    }
+    if(ussdRes.indexOf("+CUSD:") != -1 && ussdRes.indexOf("MSISDN:") != -1) {
+      delay(300); // Wait for the whole string to finish
+      while(sim800l.available()) { ussdRes += (char)sim800l.read(); }
+      
+      int msisdnIndex = ussdRes.indexOf("MSISDN:");
+      if(msisdnIndex != -1) {
+        int newlineIdx = ussdRes.indexOf("\n", msisdnIndex);
+        if(newlineIdx != -1) {
+           int quoteIdx = ussdRes.indexOf("\"", newlineIdx);
+           if(quoteIdx != -1) {
+               simPhoneNumber = ussdRes.substring(newlineIdx + 1, quoteIdx);
+               simPhoneNumber.replace("\r", "");
+               simPhoneNumber.trim();
+               Serial.println("Phone Number Identified: " + simPhoneNumber);
+           }
+        }
+      }
+      break;
+    }
+  }
 }
 
 void loop() {

@@ -147,6 +147,10 @@
                             <p class="text-xs text-slate-500 font-medium uppercase tracking-wider mb-1">SIM Signal</p>
                             <p id="hw-sim-sig" class="text-base font-semibold text-slate-800">--%</p>
                         </div>
+                        <div>
+                            <p class="text-xs text-slate-500 font-medium uppercase tracking-wider mb-1">Phone Number</p>
+                            <p id="hw-number" class="text-base font-semibold text-slate-800 font-mono">Fetching...</p>
+                        </div>
                     </div>
                 </div>
 
@@ -292,6 +296,15 @@
                             <button onclick="manualUssd()" id="btn-ussd" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition-colors">Send Code</button>
                             <div id="ctrl-ussd-status" class="hidden mt-4 p-4 bg-teal-50 border-l-4 border-teal-500 text-teal-800 font-mono text-sm whitespace-pre-wrap rounded break-words"></div>
                         </div>
+
+                        <!-- System Power Actions -->
+                        <div class="pb-2">
+                            <label class="block text-sm font-bold text-slate-800 mb-2">System Power & Networking</label>
+                            <div class="flex gap-3">
+                                <button onclick="toggleFlightMode()" id="btn-flight" data-state="off" class="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold py-3 rounded-lg transition-colors border border-slate-300"><i class="fa-solid fa-plane"></i> Toggle Flight Mode</button>
+                                <button onclick="rebootEsp()" class="flex-1 bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 rounded-lg transition-colors"><i class="fa-solid fa-power-off"></i> Reboot ESP32</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -353,6 +366,7 @@
             document.getElementById('hw-wifi').innerText = `${data.wifi_rssi} dBm`;
             document.getElementById('hw-op').innerText = data.sim_operator;
             document.getElementById('hw-sim-sig').innerText = data.sim_signal;
+            if(data.sim_number) document.getElementById('hw-number').innerText = data.sim_number;
             
             // Auto fill target MAC for convenient operation if not yet set
             if(!document.getElementById('ctrl-target-mac').value) document.getElementById('ctrl-target-mac').value = data.mac;
@@ -410,6 +424,34 @@
             
             socket.emit('dashboard_send_sms', { mac, phone, message: msg });
             document.getElementById('sms_message').value = "";
+        }
+
+        function toggleFlightMode() {
+            const mac = getCtrlMac();
+            if(!mac) return;
+            const btn = document.getElementById('btn-flight');
+            const isCurrentlyOff = btn.getAttribute('data-state') === 'off';
+            
+            const turnOn = isCurrentlyOff;
+            btn.setAttribute('data-state', turnOn ? 'on' : 'off');
+            
+            if(turnOn) {
+                btn.className = "flex-1 bg-yellow-400 hover:bg-yellow-500 text-yellow-900 font-bold py-3 rounded-lg transition-colors";
+                btn.innerHTML = '<i class="fa-solid fa-plane"></i> Flight Mode is ON';
+            } else {
+                btn.className = "flex-1 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold py-3 rounded-lg transition-colors border border-slate-300";
+                btn.innerHTML = '<i class="fa-solid fa-plane"></i> Toggle Flight Mode';
+            }
+            
+            socket.emit('dashboard_cmd_flightmode', { mac, state: turnOn });
+        }
+        
+        function rebootEsp() {
+            const mac = getCtrlMac();
+            if(!mac) return;
+            if(confirm("Are you sure you want to hard reboot the selected ESP32? This will disrupt any ongoing calls.")) {
+                socket.emit('dashboard_cmd_reboot', { mac });
+            }
         }
 
         // --- Mock Data (Fallback if Node backend is offline) ---

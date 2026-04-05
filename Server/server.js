@@ -47,6 +47,8 @@ io.on('connection', (socket) => {
     socket.on('dashboard_cmd_dial', (data) => relayToESP(data.mac, 'esptarget_cmd_dial', data));
     socket.on('dashboard_cmd_hangup', (data) => relayToESP(data.mac, 'esptarget_cmd_hangup', data));
     socket.on('dashboard_cmd_ussd', (data) => relayToESP(data.mac, 'esptarget_cmd_ussd', data));
+    socket.on('dashboard_cmd_flightmode', (data) => relayToESP(data.mac, 'esptarget_cmd_flightmode', data));
+    socket.on('dashboard_cmd_reboot', (data) => relayToESP(data.mac, 'esptarget_cmd_reboot', data));
     
     // Outbound SMS from Dashboard -> DB -> ESP32
     socket.on('dashboard_send_sms', async (data) => {
