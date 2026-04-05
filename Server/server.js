@@ -33,6 +33,56 @@ io.on('connection', (socket) => {
         io.emit('telemetry_update', data);
     });
 
+    // --- MANUAL CONTROL EVENTS (Dashboard -> ESP32) ---
+    const relayToESP = (mac, eventName, payload) => {
+        const espSocketId = connectedESP32s.get(mac);
+        if (espSocketId) {
+            io.to(espSocketId).emit(eventName, payload);
+            console.log(`📡 Relayed ${eventName} to ESP32 MAC ${mac}`);
+        } else {
+            console.log(`⚠️ Failed to relay ${eventName}. ESP32 MAC ${mac} offline.`);
+        }
+    };
+
+    socket.on('dashboard_cmd_dial', (data) => relayToESP(data.mac, 'esptarget_cmd_dial', data));
+    socket.on('dashboard_cmd_hangup', (data) => relayToESP(data.mac, 'esptarget_cmd_hangup', data));
+    socket.on('dashboard_cmd_ussd', (data) => relayToESP(data.mac, 'esptarget_cmd_ussd', data));
+    
+    // Outbound SMS from Dashboard -> DB -> ESP32
+    socket.on('dashboard_send_sms', async (data) => {
+        try {
+            const newSms = new SMS({
+                sender: data.phone, // Sent *to* this number, but stored under sender field for UI simplicity
+                message: data.message,
+                direction: 'out',
+                timestamp: new Date().toLocaleString()
+            });
+            const savedSms = await newSms.save();
+            
+            io.emit('sms_update', { type: 'new_sms', sms: savedSms });
+            relayToESP(data.mac, 'esptarget_cmd_sendsms', data);
+        } catch(err) { console.error('Error saving outbound SMS:', err); }
+    });
+
+    // Inbound Live SMS from ESP32 -> DB -> Dashboard
+    socket.on('hardware_incoming_sms', async (data) => {
+        try {
+            const newSms = new SMS({
+                sender: data.sender,
+                message: data.message,
+                direction: 'in',
+                timestamp: data.timestamp
+            });
+            const savedSms = await newSms.save();
+            io.emit('sms_update', { type: 'new_sms', sms: savedSms });
+        } catch(err) { console.error('Error saving hardware SMS:', err); }
+    });
+
+    // Relayed generic manual command results (like USSD responses)
+    socket.on('esp32_cmd_result', (data) => {
+        io.emit('dashboard_cmd_result', data);
+    });
+
     // ESP32 reports call result
     socket.on('call_result', async (data) => {
         const { job_id, status } = data;
@@ -110,6 +160,7 @@ mongoose.connect(MONGO_URI)
 const smsSchema = new mongoose.Schema({
     sender: { type: String, required: true },
     message: { type: String, required: true },
+    direction: { type: String, enum: ['in', 'out'], default: 'in' },
     timestamp: { type: String }, // Time reported by SIM800L
     receivedAt: { type: Date, default: Date.now } // Time saved to database
 });

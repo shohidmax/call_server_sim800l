@@ -17,11 +17,10 @@ WebServer server(80);
 
 bool isSimBusy = false; // Prevents command collisions
 
-// --- BACKEND SERVER SETTINGS ---
-String backendServer = "https://800lcall.espserver.site"; 
-String macAddress = "";
 unsigned long lastTelemetryTime = 0;
 const unsigned long telemetryInterval = 10000; // 10 seconds
+
+String simBuffer = ""; // Global buffer for tracking spontaneous serial events like SMS
 
 SocketIOclient socketIO;
 
@@ -362,7 +361,64 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t * payload, size_t length)
         
         if (!error) {
           const char* eventName = doc[0];
-          if (strcmp(eventName, "execute_call") == 0 && !isSimBusy) {
+          
+          if (strcmp(eventName, "esptarget_cmd_dial") == 0 && !isSimBusy) {
+            String phone = doc[1]["phone"].as<String>();
+            Serial.println("[MANUAL] Dialing: " + phone);
+            isSimBusy = true;
+            sim800l.print("ATD"); sim800l.print(phone); sim800l.println(";");
+            isSimBusy = false;
+          }
+          else if (strcmp(eventName, "esptarget_cmd_hangup") == 0) {
+            Serial.println("[MANUAL] Hang Up");
+            isSimBusy = true;
+            sim800l.println("ATH");
+            isSimBusy = false;
+          }
+          else if (strcmp(eventName, "esptarget_cmd_ussd") == 0 && !isSimBusy) {
+            String code = doc[1]["code"].as<String>();
+            Serial.println("[MANUAL] USSD: " + code);
+            isSimBusy = true;
+            while(sim800l.available()) sim800l.read();
+            
+            sim800l.print("AT+CUSD=1,\""); sim800l.print(code); sim800l.println("\",15");
+            
+            String ussdResponse = "Timeout or Error";
+            unsigned long start = millis();
+            String tb = "";
+            while (millis() - start < 15000) {
+              while (sim800l.available()) { char c = sim800l.read(); tb += c; }
+              if (tb.indexOf("+CUSD:") != -1 && tb.indexOf("\"", tb.indexOf("+CUSD:") + 7) != -1) {
+                delay(100); while (sim800l.available()) tb += (char)sim800l.read();
+                ussdResponse = tb; break;
+              }
+            }
+            isSimBusy = false;
+
+            DynamicJsonDocument resDoc(512);
+            JsonArray array = resDoc.to<JsonArray>();
+            array.add("esp32_cmd_result");
+            JsonObject resObj = array.createNestedObject();
+            resObj["type"] = "ussd";
+            resObj["data"] = ussdResponse;
+            String out; serializeJson(resDoc, out);
+            socketIO.sendEVENT(out);
+          }
+          else if (strcmp(eventName, "esptarget_cmd_sendsms") == 0 && !isSimBusy) {
+            String phone = doc[1]["phone"].as<String>();
+            String text = doc[1]["message"].as<String>();
+            Serial.println("[MANUAL] Splitting SMS to: " + phone);
+            isSimBusy = true;
+            sim800l.println("AT+CMGF=1");
+            delay(100);
+            sim800l.print("AT+CMGS=\""); sim800l.print(phone); sim800l.println("\"");
+            delay(100);
+            sim800l.print(text);
+            delay(100);
+            sim800l.write(26); // ^Z
+            isSimBusy = false;
+          }
+          else if (strcmp(eventName, "execute_call") == 0 && !isSimBusy) {
             String jobId = doc[1]["job_id"].as<String>();
             String phone = doc[1]["phone_to_call"].as<String>();
             
@@ -593,15 +649,64 @@ void setup() {
   sim800l.println("AT"); // Wake up/Handshake
   delay(100);
   sim800l.println("AT+CMGF=1"); // Set to text mode
+  delay(100);
+  sim800l.println("AT+CNMI=2,2,0,0,0"); // Deliver SMS immediately directly on serial
 }
 
 void loop() {
   // Handle incoming web client requests
   server.handleClient();
   
-  // Mirror any unsolicited data from SIM800L (like incoming calls) to Serial Monitor
+  // Mirror any unsolicited data from SIM800L to Serial Monitor & Buffer Live SMS
   while (sim800l.available()) {
-    Serial.write(sim800l.read());
+    char c = sim800l.read();
+    Serial.write(c);
+    simBuffer += c;
+  }
+
+  // Parse +CMT (live SMS) asynchronously
+  if (simBuffer.length() > 0) {
+    int cmtIndex = simBuffer.indexOf("+CMT:");
+    if (cmtIndex != -1) {
+      delay(300); // Wait for the whole message to finish arriving
+      while (sim800l.available()) {
+        char c = sim800l.read();
+        Serial.write(c);
+        simBuffer += c;
+      }
+      
+      int firstQuote = simBuffer.indexOf("\"", cmtIndex);
+      int secondQuote = simBuffer.indexOf("\"", firstQuote + 1);
+      
+      if (firstQuote != -1 && secondQuote != -1) {
+        String senderNum = simBuffer.substring(firstQuote + 1, secondQuote);
+        
+        int newlineIdx = simBuffer.indexOf("\n", secondQuote);
+        if (newlineIdx != -1) {
+          String body = simBuffer.substring(newlineIdx + 1);
+          body.replace("\r", "");
+          body.trim();
+          
+          if(body.length() > 0) {
+            DynamicJsonDocument d(512);
+            JsonArray arr = d.to<JsonArray>();
+            arr.add("hardware_incoming_sms");
+            JsonObject p = arr.createNestedObject();
+            p["sender"] = senderNum;
+            p["message"] = body;
+            p["timestamp"] = "-"; 
+
+            String output;
+            serializeJson(d, output);
+            socketIO.sendEVENT(output);
+            Serial.println("[SMS REC] Sent live over Socket.io!");
+          }
+        }
+      }
+      simBuffer = ""; // Reset buffer after dealing with CMT
+    } else if (simBuffer.length() > 500) {
+      simBuffer = ""; // Prevent memory leak from noise over time
+    }
   }
 
   // Handle ongoing Socket.IO connection
