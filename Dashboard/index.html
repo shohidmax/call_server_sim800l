@@ -58,8 +58,11 @@
             <button onclick="switchTab('sms')" id="nav-sms" class="nav-btn w-full flex items-center gap-3 px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors">
                 <i class="fa-solid fa-message w-5 text-center"></i> Messaging
             </button>
-            <button onclick="switchTab('control')" id="nav-control" class="nav-btn w-full flex items-center gap-3 px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors">
-                <i class="fa-solid fa-gamepad w-5 text-center"></i> Manual Control
+            <button onclick="switchTab('registry')" id="nav-registry" class="nav-btn w-full flex items-center gap-3 px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors">
+                <i class="fa-solid fa-address-book w-5 text-center"></i> Device Profiles
+            </button>
+            <button onclick="openControlModal('')" id="nav-control" class="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors">
+                <i class="fa-solid fa-gamepad w-5 text-center"></i> Manual <span class="text-[10px] bg-slate-700 px-1.5 py-0.5 rounded ml-auto leading-none">Popup</span>
             </button>
         </nav>
 
@@ -214,11 +217,26 @@
             <!-- TAB: SMS INBOX (Conversational Engine) -->
             <div id="tab-sms" class="tab-content h-[calc(100vh-140px)]">
                 <div class="bg-white rounded-xl shadow-sm border border-slate-100 flex flex-col h-full overflow-hidden">
-                    <div class="p-4 border-b border-slate-100 bg-slate-50 shadow-sm flex items-center gap-3 relative z-10">
-                        <div class="w-10 h-10 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center text-lg"><i class="fa-solid fa-robot"></i></div>
-                        <div>
-                            <h3 class="text-base font-semibold text-slate-800 leading-tight">Bidirectional Messaging</h3>
-                            <p class="text-xs text-slate-500">Live communication gateway via SIM800L</p>
+                    <div class="p-4 border-b border-slate-100 bg-slate-50 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center text-lg"><i class="fa-solid fa-robot"></i></div>
+                            <div>
+                                <h3 class="text-base font-semibold text-slate-800 leading-tight">Bidirectional Messaging</h3>
+                                <p class="text-xs text-slate-500">Live communication gateway via SIM800L</p>
+                            </div>
+                        </div>
+                        
+                        <!-- SMS Filter Controls -->
+                        <div class="flex items-center gap-2">
+                            <div class="relative">
+                                <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                                <input type="text" id="sms-search-text" oninput="applySmsFilter()" placeholder="Search phone or text..." class="pl-9 pr-3 py-2 w-48 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-purple-500 outline-none">
+                            </div>
+                            <select id="sms-filter-direction" onchange="applySmsFilter()" class="px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white focus:ring-2 focus:ring-purple-500 outline-none">
+                                <option value="all">All SMS</option>
+                                <option value="in">Incoming Only</option>
+                                <option value="out">Outgoing Only</option>
+                            </select>
                         </div>
                     </div>
                     
@@ -244,15 +262,79 @@
                 </div>
             </div>
 
-            <!-- TAB: MANUAL CONTROL -->
-            <div id="tab-control" class="tab-content relative max-w-lg mx-auto">
-                <div class="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
+            <!-- TAB: REGISTRY -->
+            <div id="tab-registry" class="tab-content space-y-6">
+                <!-- Register New Form -->
+                <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
+                    <h3 class="text-lg font-semibold mb-4 text-slate-800 flex justify-between items-center">
+                        <span><i class="fa-solid fa-address-card text-blue-500 mr-2"></i> Update Device Profile</span>
+                    </h3>
+                    <form id="registry-form" onsubmit="saveDeviceProfile(event)" class="space-y-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-1">ESP32 MAC Address <span class="text-red-500">*</span></label>
+                                <input type="text" id="reg_mac" list="mac-datalist" placeholder="e.g. 24:0A:C4:..." class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" required>
+                                <p class="text-xs text-slate-500 mt-1">Select from dropdown or type directly.</p>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-1">Device Name / Alias</label>
+                                <input type="text" id="reg_name" placeholder="e.g. Water Pump Node 1" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-1">Group / Category</label>
+                                <input type="text" id="reg_group" placeholder="e.g. Agriculture Hub" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-1">Allowed Users (Comma separated IDs)</label>
+                                <input type="text" id="reg_users" placeholder="e.g. U101, U105" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                            </div>
+                        </div>
+                        <button type="submit" id="btn-submit-registry" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded-lg transition-colors shadow-sm flex items-center gap-2">
+                            <i class="fa-solid fa-floppy-disk"></i> Save Profile
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Saved Profiles Table -->
+                <div class="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+                    <div class="p-6 border-b border-slate-100 bg-slate-50">
+                        <h3 class="text-lg font-semibold text-slate-800"><i class="fa-solid fa-book text-amber-500 mr-2"></i> Registered Devices Database</h3>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="bg-white text-slate-500 text-xs uppercase tracking-wider border-b border-slate-200">
+                                    <th class="p-4 font-medium">Device Name</th>
+                                    <th class="p-4 font-medium">MAC Address</th>
+                                    <th class="p-4 font-medium">Group</th>
+                                    <th class="p-4 font-medium">Allowed Users</th>
+                                    <th class="p-4 font-medium text-center">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-registry-body" class="divide-y divide-slate-100">
+                                <!-- JS Inject -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- MODAL: MANUAL CONTROL -->
+            <div id="modal-control" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm transition-opacity">
+                <div class="bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden w-full max-w-lg relative animate-[fadeIn_0.2s_ease-out]">
+                    <!-- Close button -->
+                    <button onclick="closeControlModal()" class="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-800 transition-colors z-10 focus:outline-none">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                    
                     <div class="p-6 border-b border-slate-100 bg-slate-50 text-center">
                         <h2 class="text-2xl font-bold text-slate-800">SIM800L Control</h2>
                         
                         <div class="mt-4 bg-slate-100/80 border border-slate-200 px-4 py-3 rounded-lg text-sm font-semibold text-slate-700 flex flex-col gap-2">
                            <div class="flex items-center justify-center gap-2"><i class="fa-solid fa-microchip text-slate-400"></i> Target MAC Address: <input type="text" list="mac-datalist" id="ctrl-target-mac" class="w-48 bg-white border border-slate-300 rounded px-2 py-1 text-xs text-center focus:ring-2 focus:ring-blue-500 outline-none" placeholder="24:0A:C4:AA:BB:CC"></div>
-                           <div class="pt-2 border-t border-slate-200 text-xs">Select from dropdown or type MAC manually.</div>
+                           <div class="pt-2 border-t border-slate-200 text-xs text-slate-500">Selected from dashboard. You can also type manually.</div>
                         </div>
                     </div>
 
@@ -298,6 +380,7 @@
         let liveJobs = []; // Local tracking
         let liveSms = []; // Local tracking
         let activeDevicesList = []; // Local tracking
+        let savedDeviceProfiles = []; // Registered profiles from DB
         
         // Add datalist to body
         const macDatalist = document.createElement('datalist');
@@ -333,7 +416,7 @@
             
             if (data.type === 'new_sms') {
                 liveSms.unshift(data.sms);
-                renderSmsTable(liveSms);
+                applySmsFilter(); // Use filter wrapper
                 document.getElementById('stat-sms-total').innerText = liveSms.length;
             }
         });
@@ -377,15 +460,18 @@
             }
 
             container.innerHTML = devices.map(data => `
-                <div class="border border-slate-200 rounded-lg p-5 bg-slate-50 relative">
+                <div onclick="openControlModal('${data.mac}')" class="border border-slate-200 rounded-lg p-5 bg-slate-50 relative cursor-pointer hover:border-blue-400 hover:shadow-md transition-all group">
                     <div class="absolute top-4 right-4">
                         <span class="px-2.5 py-1 rounded-full bg-green-100 text-green-700 text-xs font-semibold shadow-sm"><i class="fa-solid fa-wifi mr-1"></i> Online</span>
                     </div>
                     <div class="flex items-center gap-3 mb-4">
-                        <div class="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center text-indigo-600"><i class="fa-solid fa-microchip"></i></div>
+                        <div class="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center text-indigo-600 group-hover:scale-110 transition-transform"><i class="fa-solid fa-microchip"></i></div>
                         <div>
-                            <h4 class="font-bold text-slate-800 text-sm font-mono">${data.mac || 'Unknown MAC'}</h4>
-                            <p class="text-xs text-slate-500">ESP32 Client</p>
+                            <h4 class="font-bold text-slate-800 text-base flex items-center gap-2">${data.name || 'Unnamed ESP32'} <i class="fa-solid fa-up-right-from-square text-slate-300 text-xs hidden group-hover:block"></i></h4>
+                            <div class="flex items-center gap-2 mt-0.5">
+                                <span class="px-2 py-0.5 bg-slate-200 text-slate-600 rounded text-[10px] font-semibold">${data.group || 'Uncategorized'}</span>
+                                <p class="text-xs text-slate-400 font-mono leading-none">${data.mac || 'Unknown MAC'}</p>
+                            </div>
                         </div>
                     </div>
                     
@@ -407,7 +493,16 @@
                             <p class="text-sm font-semibold text-slate-800">${data.sim_signal ? data.sim_signal + '%' : '--%'}</p>
                         </div>
                     </div>
-                    ${data.sim_number ? `<div class="mt-3 pt-3 border-t border-slate-200"><p class="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">Phone Number</p><p class="text-sm font-semibold text-slate-800 font-mono">${data.sim_number}</p></div>` : ''}
+                    <div class="mt-3 pt-3 border-t border-slate-200 grid grid-cols-2 gap-4">
+                        <div>
+                            <p class="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">Phone Number</p>
+                            <p class="text-sm font-semibold ${data.sim_number ? 'text-slate-800' : 'text-slate-400'} font-mono">${data.sim_number || 'Fetching...'}</p>
+                        </div>
+                        <div>
+                            <p class="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">IMEI</p>
+                            <p class="text-sm font-semibold ${data.imei ? 'text-slate-800' : 'text-slate-400'} font-mono">${data.imei || 'Fetching...'}</p>
+                        </div>
+                    </div>
                 </div>
             `).join('');
         }
@@ -423,6 +518,16 @@
                   btn.disabled = false;
              }
         });
+
+        // --- Modal Control Functions ---
+        function openControlModal(mac = '') {
+            if (mac) document.getElementById('ctrl-target-mac').value = mac;
+            document.getElementById('modal-control').classList.remove('hidden');
+        }
+
+        function closeControlModal() {
+            document.getElementById('modal-control').classList.add('hidden');
+        }
 
         // --- Manual Commands ---
         function getCtrlMac() { return document.getElementById('ctrl-target-mac').value; }
@@ -496,10 +601,17 @@
         ];
 
         const mockSms = [
-            { sender: '+8801793496030', message: 'The pole has been checked. Everything is OK.', receivedAt: new Date(Date.now() - 86400000).toISOString() },
-            { sender: 'GP Info', message: 'Your internet pack is expiring tomorrow. Dial *121# to renew.', receivedAt: new Date(Date.now() - 172800000).toISOString() },
-            { sender: '+8801610034262', message: 'Send the technician to location B.', receivedAt: new Date(Date.now() - 259200000).toISOString() }
+            { sender: '+8801793496030', direction: 'in', message: 'The pole has been checked. Everything is OK.', receivedAt: new Date(Date.now() - 86400000).toISOString() },
+            { sender: '+8801793496030', direction: 'out', message: 'Please repair the junction box.', receivedAt: new Date(Date.now() - 86300000).toISOString() },
+            { sender: 'GP Info', direction: 'in', message: 'Your internet pack is expiring tomorrow. Dial *121# to renew.', receivedAt: new Date(Date.now() - 172800000).toISOString() },
+            { sender: '+8801610034262', direction: 'in', message: 'Send the technician to location B.', receivedAt: new Date(Date.now() - 259200000).toISOString() }
         ];
+        
+        liveSms = mockSms;
+
+        renderQueueTable(mockJobs);
+        applySmsFilter();
+        updateStats(mockJobs, mockSms);
 
         // --- UI Navigation ---
         function switchTab(tabId) {
@@ -524,9 +636,9 @@
                 'broadcasts': 'Broadcast Campaigns',
                 'queue': 'ESP32 Call Queue',
                 'sms': 'Messaging Terminal',
-                'control': 'Live Hardware Control'
+                'registry': 'Device Registry & ACL'
             };
-            document.getElementById('page-title').innerText = titles[tabId];
+            if(titles[tabId]) document.getElementById('page-title').innerText = titles[tabId];
         }
 
         // --- Formatting Helpers ---
@@ -571,8 +683,8 @@
                 usingMockData = true;
                 
                 const mockDevices = [
-                    { mac: 'Mock:A1:B2:C3', ip: '192.168.1.100', sim_operator: 'Grameenphone', sim_signal: 65, wifi_rssi: -50 },
-                    { mac: 'Mock:D4:E5:F6', ip: '192.168.1.105', sim_operator: 'Robi', sim_signal: 80, wifi_rssi: -40 }
+                    { mac: 'Mock:A1:B2:C3', name: 'Farm Node Alpha', group: 'Agriculture', ip: '192.168.1.100', sim_operator: 'Grameenphone', sim_signal: 65, wifi_rssi: -50, imei: '861002041234567', sim_number: '+8801793496030' },
+                    { mac: 'Mock:D4:E5:F6', name: 'Security Post B', group: 'Security', ip: '192.168.1.105', sim_operator: 'Robi', sim_signal: 80, wifi_rssi: -40, imei: '861002049876543' }
                 ];
                 renderDevices(mockDevices);
                 updateMacDatalist(mockDevices);
@@ -585,13 +697,23 @@
         }
 
         async function fetchRealData() {
+            // 0. Fetch Device Profiles
+            try {
+                const res = await fetch(`${API_BASE}/devices`);
+                const data = await res.json();
+                if(data.success) {
+                    savedDeviceProfiles = data.data;
+                    renderDeviceRegistry();
+                }
+            } catch (e) { console.error("Error fetching profiles", e); }
+
             // 1. Fetch SMS
             try {
                 const smsRes = await fetch(`${API_BASE}/sms`);
                 const smsData = await smsRes.json();
                 if(smsData.success) {
                     liveSms = smsData.data;
-                    renderSmsTable(liveSms);
+                    applySmsFilter(); // Call filter instead of direct render
                     document.getElementById('stat-sms-total').innerText = liveSms.length;
                 }
             } catch (e) { console.error("Error fetching SMS", e); }
@@ -645,7 +767,11 @@
 
             container.innerHTML = '';
             
-            if(messages.length === 0) {
+            // Check if items are filtered out
+            if(messages.length === 0 && liveSms.length > 0) {
+                container.innerHTML = `<div class="text-center text-slate-400 mt-10"><i class="fa-solid fa-filter mr-2"></i>No messages match your filter.</div>`;
+                return;
+            } else if(messages.length === 0) {
                 container.innerHTML = `<div class="text-center text-slate-400 mt-10">No messages yet. Start a conversation!</div>`;
                 return;
             }
@@ -666,6 +792,7 @@
                         <div class="flex items-center gap-2 mb-2 justify-between">
                             <span class="${isOut ? 'text-purple-200' : 'text-slate-500'} text-xs font-semibold">
                                 ${isOut ? '<i class="fa-solid fa-user text-[10px] mr-1"></i> You' : `<i class="fa-solid fa-satellite-dish text-[10px] mr-1"></i> ${msg.sender}`}
+                                ${!isOut ? ' <span class="bg-blue-100 text-blue-700 font-bold px-1.5 py-0.5 rounded text-[9px] ml-1 uppercase">In</span>' : ''}
                             </span>
                             <span class="${isOut ? 'text-purple-300' : 'text-slate-400'} text-[10px] whitespace-nowrap">${formatDate(msg.receivedAt || msg.createdAt)}</span>
                         </div>
@@ -676,6 +803,27 @@
             });
             // Auto scroll to bottom
             container.scrollTop = container.scrollHeight;
+        }
+
+        // --- Filter Logic ---
+        function applySmsFilter() {
+            const searchText = document.getElementById('sms-search-text').value.toLowerCase();
+            const direction = document.getElementById('sms-filter-direction').value;
+
+            let filteredList = liveSms.filter(msg => {
+                const textMatch = msg.message?.toLowerCase().includes(searchText) || msg.sender?.toLowerCase().includes(searchText);
+                
+                // For legacy messages that might not have a direction saved, assume incoming
+                const msgDir = msg.direction || 'in'; 
+                
+                let dirMatch = true;
+                if (direction === 'in') dirMatch = msgDir === 'in';
+                if (direction === 'out') dirMatch = msgDir === 'out';
+
+                return textMatch && dirMatch;
+            });
+
+            renderSmsTable(filteredList);
         }
 
         function updateStats(jobs, sms) {
@@ -754,6 +902,94 @@
             } finally {
                 btn.innerHTML = originalText;
                 btn.disabled = false;
+            }
+        }
+
+        // --- Device Registry Logic ---
+        function renderDeviceRegistry() {
+            const tbody = document.getElementById('table-registry-body');
+            if(!tbody) return;
+            tbody.innerHTML = '';
+            
+            if(savedDeviceProfiles.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="5" class="p-8 text-center text-slate-400">No profiles registered yet.</td></tr>`;
+                return;
+            }
+
+            savedDeviceProfiles.forEach(dev => {
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-slate-50 transition-colors";
+                tr.innerHTML = `
+                    <td class="p-4 text-sm font-semibold text-slate-800 border-t border-slate-100">${dev.name}</td>
+                    <td class="p-4 text-sm text-slate-500 border-t border-slate-100 font-mono text-xs">${dev.mac}</td>
+                    <td class="p-4 border-t border-slate-100"><span class="px-2 py-1 bg-slate-100 text-slate-600 rounded text-xs font-semibold border border-slate-200">${dev.group}</span></td>
+                    <td class="p-4 text-sm text-slate-500 border-t border-slate-100">${dev.allowedUsers?.length > 0 ? dev.allowedUsers.join(', ') : 'Everyone'}</td>
+                    <td class="p-4 border-t border-slate-100 text-center">
+                        <button onclick="editProfile('${dev.mac}')" class="text-blue-500 hover:text-blue-700 bg-blue-50 px-3 py-1.5 rounded text-xs transition-colors"><i class="fa-solid fa-pen"></i> Edit</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function editProfile(mac) {
+            const dev = savedDeviceProfiles.find(d => d.mac === mac);
+            if(dev) {
+                document.getElementById('reg_mac').value = dev.mac;
+                document.getElementById('reg_name').value = dev.name;
+                document.getElementById('reg_group').value = dev.group;
+                document.getElementById('reg_users').value = dev.allowedUsers ? dev.allowedUsers.join(', ') : '';
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+                // Flash animation onto form
+                const form = document.querySelector('#registry-form').parentElement;
+                form.classList.add('ring-2', 'ring-blue-400');
+                setTimeout(() => form.classList.remove('ring-2', 'ring-blue-400'), 1000);
+            }
+        }
+
+        async function saveDeviceProfile(e) {
+            e.preventDefault();
+            const btn = document.getElementById('btn-submit-registry');
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+            btn.disabled = true;
+
+            const usersStr = document.getElementById('reg_users').value;
+            const users = usersStr ? usersStr.split(',').map(u => u.trim()).filter(Boolean) : [];
+
+            const payload = {
+                mac: document.getElementById('reg_mac').value,
+                name: document.getElementById('reg_name').value || 'Unnamed ESP32',
+                group: document.getElementById('reg_group').value || 'Uncategorized',
+                allowedUsers: users
+            };
+
+            try {
+                if(usingMockData) {
+                    await new Promise(r => setTimeout(r, 500));
+                    // Update mock view locally
+                    const existingIdx = savedDeviceProfiles.findIndex(d => d.mac === payload.mac);
+                    if(existingIdx !== -1) savedDeviceProfiles[existingIdx] = payload;
+                    else savedDeviceProfiles.push(payload);
+                    renderDeviceRegistry();
+                    alert("Mock Mode: Saved locally to view (Not touching MongoDB)");
+                } else {
+                    const res = await fetch(`${API_BASE}/devices`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(payload)
+                    });
+                    const d = await res.json();
+                    if(d.success) {
+                        alert('Device profile updated successfully!');
+                        fetchData(); // reload all to refresh DB tables
+                    } else throw new Error(d.error || 'Failed to save');
+                }
+            } catch(err) {
+                alert('Error: ' + err.message);
+            } finally {
+                btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Profile';
+                btn.disabled = false;
+                document.getElementById('registry-form').reset();
             }
         }
 

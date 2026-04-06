@@ -16,9 +16,27 @@ const connectedESP32s = new Map();
 const activeDeviceTelemetry = new Map(); // Store latest telemetry for each MAC
 
 // Helper function to broadcast all active devices
-const broadcastActiveDevices = () => {
-    const devicesArray = Array.from(activeDeviceTelemetry.values());
-    io.emit('active_devices_update', devicesArray);
+const broadcastActiveDevices = async () => {
+    try {
+        const devicesArray = Array.from(activeDeviceTelemetry.values());
+        
+        // Fetch profiles if Mongoose is ready
+        let DeviceProfile;
+        try { DeviceProfile = mongoose.model('DeviceProfile'); } catch(e) {}
+        
+        let enrichedDevices = devicesArray;
+        if (DeviceProfile) {
+            const profiles = await DeviceProfile.find();
+            enrichedDevices = devicesArray.map(device => {
+                const profile = profiles.find(p => p.mac === device.mac);
+                if (profile) {
+                    return { ...device, name: profile.name, group: profile.group, allowedUsers: profile.allowedUsers };
+                }
+                return { ...device, name: 'Unnamed ESP32', group: 'Uncategorized', allowedUsers: [] };
+            });
+        }
+        io.emit('active_devices_update', enrichedDevices);
+    } catch (err) { console.error('Error broadcasting:', err); }
 };
 
 io.on('connection', (socket) => {
@@ -190,6 +208,16 @@ const smsSchema = new mongoose.Schema({
 
 const SMS = mongoose.model('SMS', smsSchema);
 
+// --- Device Profile Schema & Model ---
+const deviceProfileSchema = new mongoose.Schema({
+    mac: { type: String, required: true, unique: true },
+    name: { type: String, default: 'Unnamed ESP32' },
+    group: { type: String, default: 'Uncategorized' },
+    allowedUsers: [{ type: String }], // Comma separated or array of User IDs
+    registeredAt: { type: Date, default: Date.now }
+});
+const DeviceProfile = mongoose.model('DeviceProfile', deviceProfileSchema);
+
 // --- Broadcast/Alert Schema & Model ---
 // This schema matches your specific JSON payload structure
 const broadcastSchema = new mongoose.Schema({
@@ -357,6 +385,38 @@ app.get('/api/jobs', async (req, res) => {
         res.status(200).json({ success: true, data: jobs });
     } catch(err) {
         res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// 8. GET Route: Fetch all device profiles (for registry tab)
+app.get('/api/devices', async (req, res) => {
+    try {
+        const devices = await DeviceProfile.find().sort({ registeredAt: -1 });
+        res.status(200).json({ success: true, data: devices });
+    } catch (error) {
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// 9. POST Route: Save or Update Device Profile (Name, Group, Users)
+app.post('/api/devices', async (req, res) => {
+    try {
+        const { mac, name, group, allowedUsers } = req.body;
+        if (!mac) return res.status(400).json({ error: 'MAC required' });
+
+        const updatedDevice = await DeviceProfile.findOneAndUpdate(
+            { mac: mac },
+            { name, group, allowedUsers },
+            { new: true, upsert: true }
+        );
+        
+        // Re-broadcast so everyone sees the new name/group instantly
+        broadcastActiveDevices();
+        
+        res.status(200).json({ success: true, data: updatedDevice });
+    } catch (error) {
+        console.error('Update Profile error:', error);
+        res.status(500).json({ error: 'Failed to update device' });
     }
 });
 
