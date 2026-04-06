@@ -13,15 +13,29 @@ const PORT = process.env.PORT || 3000;
 
 // Socket.IO Logic
 const connectedESP32s = new Map();
+const activeDeviceTelemetry = new Map(); // Store latest telemetry for each MAC
+
+// Helper function to broadcast all active devices
+const broadcastActiveDevices = () => {
+    const devicesArray = Array.from(activeDeviceTelemetry.values());
+    io.emit('active_devices_update', devicesArray);
+};
 
 io.on('connection', (socket) => {
     console.log(`🔌 New client connected: ${socket.id}`);
+    
+    // Immediately send current devices to new client
+    socket.emit('active_devices_update', Array.from(activeDeviceTelemetry.values()));
 
     // ESP32 Registration
     socket.on('esp32_register', (data) => {
         const mac = data.mac;
         if (mac) {
             connectedESP32s.set(mac, socket.id);
+            if (!activeDeviceTelemetry.has(mac)) {
+                activeDeviceTelemetry.set(mac, { mac, ip: data.ip || 'Unknown', status: 'online', initializedDate: Date.now() });
+                broadcastActiveDevices();
+            }
             console.log(`✅ ESP32 registered with MAC: ${mac} on socket: ${socket.id}`);
             // Trigger next job if any exist when it re/connects
             sendNextJobToESP32(mac);
@@ -30,7 +44,12 @@ io.on('connection', (socket) => {
 
     // ESP32 Telemetry Relay
     socket.on('esp32_telemetry', (data) => {
-        io.emit('telemetry_update', data);
+        if (data.mac) {
+            data.lastSeen = Date.now();
+            activeDeviceTelemetry.set(data.mac, data);
+            broadcastActiveDevices(); // Broad cast full state array
+        }
+        io.emit('telemetry_update', data); // Keep backwards compatible relay
     });
 
     // --- MANUAL CONTROL EVENTS (Dashboard -> ESP32) ---
@@ -111,6 +130,8 @@ io.on('connection', (socket) => {
         for (const [mac, id] of connectedESP32s.entries()) {
             if (id === socket.id) {
                 connectedESP32s.delete(mac);
+                activeDeviceTelemetry.delete(mac);
+                broadcastActiveDevices();
                 console.log(`🔻 ESP32 MAC ${mac} disconnected`);
                 break;
             }
