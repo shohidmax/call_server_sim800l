@@ -481,15 +481,13 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t * payload, size_t length)
                 callOngoing = false;
               }
               else if(simResponse.indexOf("NO CARRIER") != -1) {
-                // If it was previously received but then disconnected
-                if(wasReceived) resultStatus = "success"; 
-                // If NO CARRIER very fast (less than 5 sec), it's usually number off or network fail
-                else if (millis() - callStart < 5000) resultStatus = "number_off";
-                else resultStatus = "failed"; // Unreachable or no pick up
+                // If NO CARRIER very fast (less than 5 sec), network disconnected instantly (unreachable)
+                if (millis() - callStart < 5000) resultStatus = "unreachable";
+                else resultStatus = "success"; // It rang successfully but was disconnected later
                 callOngoing = false;
               }
               else if(simResponse.indexOf("NO ANSWER") != -1) {
-                 resultStatus = "failed"; // Rang but didn't pick up
+                 resultStatus = "success"; // Rang successfully but didn't pick up
                  callOngoing = false;
               }
 
@@ -516,9 +514,8 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t * payload, size_t length)
             while(sim800l.available()) Serial.write(sim800l.read()); // flush remaining data
             
             isSimBusy = false;
-            // Clean up statuses
+            // Clean up exact statuses overrides if needed
             if(resultStatus == "success" && wasReceived) resultStatus = "received"; 
-            if(resultStatus == "success" && !wasReceived) resultStatus = "failed"; 
 
             Serial.println("\n[SERVER JOB] Call finished. Status: " + resultStatus);
 
@@ -761,11 +758,15 @@ void loop() {
   if (simBuffer.length() > 0) {
     int cmtIndex = simBuffer.indexOf("+CMT:");
     if (cmtIndex != -1) {
-      delay(300); // Wait for the whole message to finish arriving
-      while (sim800l.available()) {
-        char c = sim800l.read();
-        Serial.write(c);
-        simBuffer += c;
+      // Wait for transmission to finish (Serial quiet for 100ms)
+      unsigned long lastCharTime = millis();
+      while (millis() - lastCharTime < 100) {
+        while (sim800l.available()) {
+          char c = sim800l.read();
+          Serial.write(c);
+          simBuffer += c;
+          lastCharTime = millis();
+        }
       }
       
       int firstQuote = simBuffer.indexOf("\"", cmtIndex);
@@ -776,12 +777,13 @@ void loop() {
         
         int newlineIdx = simBuffer.indexOf("\n", secondQuote);
         if (newlineIdx != -1) {
+          // Read up to the end of the acquired string
           String body = simBuffer.substring(newlineIdx + 1);
           body.replace("\r", "");
           body.trim();
           
           if(body.length() > 0) {
-            DynamicJsonDocument d(512);
+            DynamicJsonDocument d(1024); // Support very large Hex bodies securely
             JsonArray arr = d.to<JsonArray>();
             arr.add("hardware_incoming_sms");
             JsonObject p = arr.createNestedObject();
@@ -797,8 +799,8 @@ void loop() {
         }
       }
       simBuffer = ""; // Reset buffer after dealing with CMT
-    } else if (simBuffer.length() > 500) {
-      simBuffer = ""; // Prevent memory leak from noise over time
+    } else if (simBuffer.length() > 1500) {
+      simBuffer = ""; // Prevent memory leak from noise over time, increased to 1500 to allow very long chunks before pruning
     }
   }
 

@@ -655,9 +655,10 @@
                 case 'hardware_error': return `<span class="px-2.5 py-1 rounded-full bg-red-800 text-white text-xs font-semibold" title="Device Error - Job Recycled"><i class="fa-solid fa-triangle-exclamation mr-1"></i> HW Error</span>`;
                 case 'calling': return `<span class="px-2.5 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold"><i class="fa-solid fa-phone-volume fa-shake mr-1"></i> Calling</span>`;
                 case 'pending': return `<span class="px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-semibold" title="Waiting for available ESP32"><i class="fa-regular fa-clock mr-1"></i> Pending in Pool</span>`;
-                case 'busy': return `<span class="px-2.5 py-1 rounded-full bg-orange-100 text-orange-700 text-xs font-semibold" title="Call was rejected"><i class="fa-solid fa-phone-slash mr-1"></i> Busy/Rejected</span>`;
+                case 'busy': return `<span class="px-2.5 py-1 rounded-full bg-orange-100 text-orange-700 text-xs font-semibold" title="Call was rejected"><i class="fa-solid fa-phone-slash mr-1"></i> Busy</span>`;
                 case 'received': return `<span class="px-2.5 py-1 rounded-full bg-teal-100 text-teal-700 text-xs font-semibold" title="User answered the call"><i class="fa-solid fa-ear-listen mr-1"></i> Received</span>`;
-                case 'number_off': return `<span class="px-2.5 py-1 rounded-full bg-purple-100 text-purple-700 text-xs font-semibold" title="Number is unreachable"><i class="fa-solid fa-power-off mr-1"></i> Number Off</span>`;
+                case 'unreachable': 
+                case 'number_off': return `<span class="px-2.5 py-1 rounded-full bg-slate-200 text-slate-700 text-xs font-semibold" title="Number is unreachable or network failed"><i class="fa-solid fa-power-off mr-1"></i> Unreachable</span>`;
                 default: return `<span class="px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-semibold">${status}</span>`;
             }
         }

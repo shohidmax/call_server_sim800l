@@ -104,12 +104,30 @@ io.on('connection', (socket) => {
         } catch(err) { console.error('Error saving outbound SMS:', err); }
     });
 
+    // Helper function to detect and decode SIM800L UCS2 Hex strings (e.g. for Bengali SMS)
+    const decodeUCS2 = (str) => {
+        if (!str || typeof str !== 'string' || str.length % 4 !== 0 || !/^[0-9A-Fa-f]+$/.test(str)) {
+            return str; // Return original if not perfectly forming a UCS2 hex string
+        }
+        let result = '';
+        for (let i = 0; i < str.length; i += 4) {
+            result += String.fromCharCode(parseInt(str.substr(i, 4), 16));
+        }
+        
+        // Sometimes short english words happen to be valid Hex (like "FEED"). 
+        // We ensure we don't accidentally ruin them if they decode to unprintable garbage.
+        // A standard Bengali text will decode cleanly.
+        if(/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(result)) return str; 
+        
+        return result;
+    };
+
     // Inbound Live SMS from ESP32 -> DB -> Dashboard
     socket.on('hardware_incoming_sms', async (data) => {
         try {
             const newSms = new SMS({
-                sender: data.sender,
-                message: data.message,
+                sender: decodeUCS2(data.sender),
+                message: decodeUCS2(data.message),
                 direction: 'in',
                 timestamp: data.timestamp
             });
@@ -279,7 +297,7 @@ const Broadcast = mongoose.model('Broadcast', broadcastSchema);
 const espJobSchema = new mongoose.Schema({
     mac: { type: String, required: false }, // Optional, allowing floating jobs
     phone: { type: String, required: true },
-    status: { type: String, enum: ['pending', 'calling', 'success', 'fail', 'failed', 'hardware_error', 'busy', 'received', 'number_off'], default: 'pending' },
+    status: { type: String, enum: ['pending', 'calling', 'success', 'fail', 'failed', 'hardware_error', 'busy', 'received', 'number_off', 'unreachable'], default: 'pending' },
     createdAt: { type: Date, default: Date.now }
 });
 
@@ -301,7 +319,24 @@ app.post('/api/sms', async (req, res) => {
             return res.status(400).json({ error: 'Sender and message are required' });
         }
 
-        const newSms = new SMS({ sender, message, timestamp });
+        // Helper function for the HTTP route as well
+        const decodeUCS2 = (str) => {
+            if (!str || typeof str !== 'string' || str.length % 4 !== 0 || !/^[0-9A-Fa-f]+$/.test(str)) {
+                return str; 
+            }
+            let result = '';
+            for (let i = 0; i < str.length; i += 4) {
+                result += String.fromCharCode(parseInt(str.substr(i, 4), 16));
+            }
+            if(/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(result)) return str; 
+            return result;
+        };
+
+        const newSms = new SMS({ 
+            sender: decodeUCS2(sender), 
+            message: decodeUCS2(message), 
+            timestamp 
+        });
         const savedSms = await newSms.save();
 
         console.log(`📩 New SMS saved from ${sender}`);
