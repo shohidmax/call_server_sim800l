@@ -55,8 +55,9 @@ io.on('connection', (socket) => {
                 broadcastActiveDevices();
             }
             console.log(`✅ ESP32 registered with MAC: ${mac} on socket: ${socket.id}`);
-            // Trigger next job if any exist when it re/connects
-            sendNextJobToESP32(mac);
+            console.log(`✅ ESP32 registered with MAC: ${mac} on socket: ${socket.id}`);
+            // Trigger dispatcher immediately to see if jobs are waiting
+            if(typeof dispatchJobs === 'function') dispatchJobs();
         }
     });
 
@@ -128,16 +129,38 @@ io.on('connection', (socket) => {
         if (!job_id || !status) return;
 
         try {
-            const updatedJob = await EspJob.findByIdAndUpdate(job_id, { status }, { new: true });
+            let actualStatus = status;
+            
+            // If it failed due to hardware error, release the job back to the global pool! (Failover)
+            if (status === 'hardware_error') {
+                actualStatus = 'pending';
+            }
+
+            const updateData = { status: actualStatus };
+            if (actualStatus === 'pending') {
+                updateData.mac = null; // Unbind MAC so any free ESP32 can pick it up
+            }
+
+            const updatedJob = await EspJob.findByIdAndUpdate(job_id, updateData, { new: true });
+            
             console.log(`📞 Call Result for ${updatedJob?.phone || 'unknown'}: ${status.toUpperCase()}`);
             
             // Notify dashboards
             io.emit('dashboard_update', { type: 'job_update', job: updatedJob });
 
-            // Fetch and send the next job for this ESP32
-            if (updatedJob && updatedJob.mac) {
-                sendNextJobToESP32(updatedJob.mac);
+            // Free the ESP32 that just finished so it can take another call
+            let callerMac = null;
+            for (const [m, sId] of connectedESP32s.entries()) {
+                if (sId === socket.id) { callerMac = m; break; }
             }
+            if (callerMac && activeDeviceTelemetry.has(callerMac)) {
+                const telem = activeDeviceTelemetry.get(callerMac);
+                telem.isBusy = false;
+                activeDeviceTelemetry.set(callerMac, telem);
+            }
+
+            // Immediately check for next jobs across the cluster
+            if(typeof dispatchJobs === 'function') dispatchJobs();
         } catch (error) {
             console.error('Error handling call_result via socket:', error);
         }
@@ -157,30 +180,46 @@ io.on('connection', (socket) => {
     });
 });
 
-// Helper function to send next job via Socket
-async function sendNextJobToESP32(mac) {
-    const espSocketId = connectedESP32s.get(mac);
-    if (!espSocketId) return;
-
+// Global Load Balancer Dispatcher
+const dispatchJobs = async () => {
     try {
-        const pendingJob = await EspJob.findOneAndUpdate(
-            { mac: mac, status: 'pending' },
-            { status: 'calling' },
-            { new: true }
-        );
-
-        if (pendingJob) {
-            io.to(espSocketId).emit('execute_call', {
-                job_id: pendingJob._id,
-                phone_to_call: pendingJob.phone
-            });
-            io.emit('dashboard_update', { type: 'job_update', job: pendingJob });
-            console.log(`⏳ Pushed job ${pendingJob._id} to ESP32 ${mac}`);
+        const freeMacs = [];
+        for (const [mac, telemetry] of activeDeviceTelemetry.entries()) {
+            // Check if device is free and socket actually connected
+            if (!telemetry.isBusy && connectedESP32s.has(mac)) {
+                freeMacs.push(mac);
+            }
         }
-    } catch (e) {
-        console.error('Error sending next job to ESP32:', e);
-    }
-}
+        
+        for (const mac of freeMacs) {
+            // Find an open job (bound to this mac OR floating)
+            const pendingJob = await EspJob.findOneAndUpdate(
+                { status: 'pending', $or: [{ mac: mac }, { mac: null }, { mac: "" }] },
+                { status: 'calling', mac: mac },
+                { sort: { createdAt: 1 }, new: true }
+            );
+
+            if (pendingJob) {
+                // Lock this MAC locally immediately so we don't spam it in the loop
+                const telemetry = activeDeviceTelemetry.get(mac);
+                telemetry.isBusy = true;
+                activeDeviceTelemetry.set(mac, telemetry);
+
+                const espSocketId = connectedESP32s.get(mac);
+                io.to(espSocketId).emit('execute_call', {
+                    job_id: pendingJob._id.toString(),
+                    phone_to_call: pendingJob.phone
+                });
+                
+                io.emit('dashboard_update', { type: 'job_update', job: pendingJob });
+                console.log(`🚀 [Load Balancer] Pushed job ${pendingJob._id} to ESP32 ${mac}`);
+            }
+        }
+    } catch(e) { console.error('Dispatch error:', e); }
+};
+
+// Check dispatch queue routinely for safety
+setInterval(dispatchJobs, 3000);
 
 
 // Middleware
@@ -238,9 +277,9 @@ const Broadcast = mongoose.model('Broadcast', broadcastSchema);
 // --- ESP32 Call Job Schema ---
 // This schema creates a queue of individual phone calls for the ESP32 to make
 const espJobSchema = new mongoose.Schema({
-    mac: { type: String, required: true },
+    mac: { type: String, required: false }, // Optional, allowing floating jobs
     phone: { type: String, required: true },
-    status: { type: String, enum: ['pending', 'calling', 'success', 'fail'], default: 'pending' },
+    status: { type: String, enum: ['pending', 'calling', 'success', 'fail', 'failed', 'hardware_error', 'busy', 'received', 'number_off'], default: 'pending' },
     createdAt: { type: Date, default: Date.now }
 });
 
@@ -298,9 +337,10 @@ app.post('/api/broadcast', async (req, res) => {
         const savedBroadcast = await newBroadcast.save();
 
         // 2. Break down the phone list and queue individual jobs for the ESP32
-        if (mac && phone_call_list && phone_call_list.length > 0) {
+        if (phone_call_list && phone_call_list.length > 0) {
+            const assignedMac = mac && mac.trim() !== '' ? mac : null;
             const jobsToCreate = phone_call_list.map(num => ({
-                mac: mac,
+                mac: assignedMac,
                 phone: num,
                 status: 'pending'
             }));
@@ -309,11 +349,11 @@ app.post('/api/broadcast', async (req, res) => {
             // Send newly created jobs to all dashboards
             io.emit('dashboard_update', { type: 'new_jobs', jobs: insertedJobs });
 
-            // Push first pending job directly to the specific ESP32
-            sendNextJobToESP32(mac);
+            // Trigger global dispatcher immediately
+            if(typeof dispatchJobs === 'function') dispatchJobs();
         }
 
-        console.log(`📡 Broadcast saved & calls queued for MAC: ${mac}`);
+        console.log(`📡 Broadcast saved & ${phone_call_list?.length} calls queued globally.`);
         res.status(201).json({ success: true, message: 'Broadcast saved & calls queued', data: savedBroadcast });
     } catch (error) {
         console.error('Error saving broadcast report:', error);

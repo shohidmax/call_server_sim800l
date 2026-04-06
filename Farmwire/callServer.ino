@@ -456,31 +456,70 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t * payload, size_t length)
             sim800l.print(phone);
             sim800l.println(";");
             
-            bool callFailed = false;
+            String resultStatus = "success"; 
             unsigned long callStart = millis();
             String simResponse = "";
-            
-            // Wait 15 seconds for the call to ring/complete
-            Serial.println("Dialing... waiting 15 seconds...");
-            while(millis() - callStart < 15000) {
+            bool callOngoing = true;
+            bool wasReceived = false;
+
+            Serial.println("Dialing... waiting up to 30s...");
+            unsigned long lastClccPoll = millis();
+
+            while(millis() - callStart < 30000 && callOngoing) {
               while(sim800l.available()) {
                 char c = sim800l.read();
                 simResponse += c;
                 Serial.write(c);
               }
-              if(simResponse.indexOf("BUSY") != -1 || simResponse.indexOf("NO CARRIER") != -1 || simResponse.indexOf("ERROR") != -1) {
-                callFailed = true;
-                break;
+              
+              if(simResponse.indexOf("BUSY") != -1) {
+                resultStatus = "busy"; // Remote user rejected
+                callOngoing = false;
+              }
+              else if(simResponse.indexOf("ERROR") != -1) {
+                resultStatus = "hardware_error"; // Modem error
+                callOngoing = false;
+              }
+              else if(simResponse.indexOf("NO CARRIER") != -1) {
+                // If it was previously received but then disconnected
+                if(wasReceived) resultStatus = "success"; 
+                // If NO CARRIER very fast (less than 5 sec), it's usually number off or network fail
+                else if (millis() - callStart < 5000) resultStatus = "number_off";
+                else resultStatus = "failed"; // Unreachable or no pick up
+                callOngoing = false;
+              }
+              else if(simResponse.indexOf("NO ANSWER") != -1) {
+                 resultStatus = "failed"; // Rang but didn't pick up
+                 callOngoing = false;
+              }
+
+              // Poll AT+CLCC every 2.5 seconds to see if it was picked up
+              if (millis() - lastClccPoll > 2500 && callOngoing) {
+                 sim800l.println("AT+CLCC");
+                 lastClccPoll = millis();
+              }
+              
+              if(simResponse.indexOf("+CLCC: 1,0,0,0,0") != -1 || simResponse.indexOf("+CLCC: 1,1,0,0,0") != -1) {  // 0 means ACTIVE
+                 wasReceived = true;
+                 resultStatus = "received";
+              }
+
+              // clear big buffer safely
+              if(simResponse.length() > 250) {
+                 simResponse = simResponse.substring(simResponse.length() - 50);
               }
             }
             
-            // Hang up
+            // Hang up explicitly
             sim800l.println("ATH");
             delay(1000);
             while(sim800l.available()) Serial.write(sim800l.read()); // flush remaining data
             
             isSimBusy = false;
-            String resultStatus = callFailed ? "fail" : "success";
+            // Clean up statuses
+            if(resultStatus == "success" && wasReceived) resultStatus = "received"; 
+            if(resultStatus == "success" && !wasReceived) resultStatus = "failed"; 
+
             Serial.println("\n[SERVER JOB] Call finished. Status: " + resultStatus);
 
             // Report result back to server via Socket.io
