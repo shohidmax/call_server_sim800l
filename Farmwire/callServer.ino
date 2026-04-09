@@ -1,16 +1,26 @@
-#include <WiFi.h>
-#include <WebServer.h>
-#include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
-#include <HTTPClient.h>  // Added for server communication
-#include <ArduinoJson.h> // Added for parsing JSON from server
+#include <ArduinoJson.h>    // Added for parsing JSON from server
+#include <HTTPClient.h>     // Added for server communication
 #include <SocketIOclient.h> // Socket.IO client for realtime events
+#include <WebServer.h>
+#include <WiFi.h>
+#include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
+#include "DFRobotDFPlayerMini.h"
+
 
 // --- PIN DEFINITIONS ---
 #define SIM800L_RX 16 // ESP32 RX2 (Connects to SIM800L TX)
 #define SIM800L_TX 17 // ESP32 TX2 (Connects to SIM800L RX)
+#define LED_PIN 2     // D2 LED Pin
+
+#define DFPLAYER_RX 14 // ESP32 RX (from DFPlayer TX)
+#define DFPLAYER_TX 27 // ESP32 TX (to DFPlayer RX via 1k resistor)
 
 // Initialize HardwareSerial 2 for SIM800L
 HardwareSerial sim800l(2);
+
+// Initialize HardwareSerial 1 for DFPlayer
+HardwareSerial dfSerial(1);
+DFRobotDFPlayerMini myDFPlayer;
 
 // Initialize WebServer on port 80
 WebServer server(80);
@@ -18,17 +28,27 @@ WebServer server(80);
 bool isSimBusy = false; // Prevents command collisions
 
 // --- BACKEND SERVER SETTINGS ---
-String backendServer = "https://800lcall.espserver.site"; 
+String mainHost = "800lcall.espserver.site";
+String backupHost = "sim800l.maxapi.esp32.site";
+String currentHost = mainHost;
+bool isSocketConnected = false;
+unsigned long lastSocketDisconnectTime = 0;
+const unsigned long socketFailoverTimeout = 20000; // 20 seconds
 String macAddress = "";
 
 unsigned long lastTelemetryTime = 0;
 const unsigned long telemetryInterval = 10000; // 10 seconds
 
-String simBuffer = ""; // Global buffer for tracking spontaneous serial events like SMS
+String simBuffer =
+    ""; // Global buffer for tracking spontaneous serial events like SMS
 String simPhoneNumber = "Unknown"; // Global variable fetched on boot
 
 SocketIOclient socketIO;
 
+// Variables for LED blinking
+unsigned long lastBlinkTime = 0;
+bool ledState = false;
+const unsigned long blinkInterval = 500; // 500ms blink interval
 // --- HTML DASHBOARD (Stored in flash memory) ---
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -239,28 +259,31 @@ const char index_html[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
-
 // --- HELPER FUNCTION: Wait for USSD Response ---
 String waitUSSDResponse(uint32_t timeout) {
   uint32_t startTime = millis();
   String responseBuffer = "";
-  
+
   while (millis() - startTime < timeout) {
     while (sim800l.available()) {
       char c = sim800l.read();
       responseBuffer += c;
       Serial.write(c); // Mirror to Serial Monitor
     }
-    
+
     // Check if the response buffer contains the USSD reply tag (+CUSD:)
-    if (responseBuffer.indexOf("+CUSD:") != -1 && responseBuffer.indexOf("\"", responseBuffer.indexOf("+CUSD:") + 7) != -1) {
-       // Allow a tiny delay to catch the end of the message carriage returns
-       delay(100); 
-       while (sim800l.available()) { responseBuffer += (char)sim800l.read(); }
-       return responseBuffer;
+    if (responseBuffer.indexOf("+CUSD:") != -1 &&
+        responseBuffer.indexOf("\"", responseBuffer.indexOf("+CUSD:") + 7) !=
+            -1) {
+      // Allow a tiny delay to catch the end of the message carriage returns
+      delay(100);
+      while (sim800l.available()) {
+        responseBuffer += (char)sim800l.read();
+      }
+      return responseBuffer;
     }
   }
-  
+
   if (responseBuffer.length() > 0) {
     return "Partial response/Timeout: \n" + responseBuffer;
   }
@@ -270,24 +293,27 @@ String waitUSSDResponse(uint32_t timeout) {
 // --- HELPER FUNCTION: Send Basic AT Command ---
 String sendATCommand(String cmd, uint32_t timeout) {
   String response = "";
-  while(sim800l.available()) sim800l.read(); // Clear buffer
+  while (sim800l.available())
+    sim800l.read(); // Clear buffer
   sim800l.println(cmd);
   uint32_t t = millis();
-  while(millis() - t < timeout) {
-    while(sim800l.available()) {
+  while (millis() - t < timeout) {
+    while (sim800l.available()) {
       response += (char)sim800l.read();
     }
-    if(response.indexOf("OK") != -1 || response.indexOf("ERROR") != -1) break;
+    if (response.indexOf("OK") != -1 || response.indexOf("ERROR") != -1)
+      break;
   }
   return response;
 }
 
 // --- HELPER FUNCTION: Send Tracking Telemetry ---
 void sendTelemetry() {
-  if (isSimBusy || WiFi.status() != WL_CONNECTED) return;
-  
+  if (isSimBusy || WiFi.status() != WL_CONNECTED)
+    return;
+
   isSimBusy = true; // Briefly lock to prevent call collision
-  
+
   // 1. Get Operator Name (AT+COPS?)
   String opName = "Searching...";
   String copsRes = sendATCommand("AT+COPS?", 1500);
@@ -303,20 +329,22 @@ void sendTelemetry() {
   int csqIdx = csqRes.indexOf("+CSQ: ");
   if (csqIdx != -1) {
     int commaIdx = csqRes.indexOf(',', csqIdx);
-    if(commaIdx != -1) {
+    if (commaIdx != -1) {
       int csqVal = csqRes.substring(csqIdx + 6, commaIdx).toInt();
-      if (csqVal == 99) sigStr = "No Signal";
-      else sigStr = String((csqVal * 100) / 31) + "%"; 
+      if (csqVal == 99)
+        sigStr = "No Signal";
+      else
+        sigStr = String((csqVal * 100) / 31) + "%";
     }
   }
-  
+
   isSimBusy = false;
 
   // Emit to socket
   DynamicJsonDocument doc(256);
   JsonArray array = doc.to<JsonArray>();
   array.add("esp32_telemetry");
-  
+
   JsonObject payload = array.createNestedObject();
   payload["mac"] = macAddress;
   payload["ip"] = WiFi.localIP().toString();
@@ -324,247 +352,292 @@ void sendTelemetry() {
   payload["sim_operator"] = opName;
   payload["sim_signal"] = sigStr;
   payload["sim_number"] = simPhoneNumber;
-  
+
   String output;
   serializeJson(doc, output);
   socketIO.sendEVENT(output);
 }
 
 // --- HELPER FUNCTION: Handle Socket.IO Events ---
-void socketIOEvent(socketIOmessageType_t type, uint8_t * payload, size_t length) {
-  switch(type) {
-    case sIOtype_DISCONNECT:
-      Serial.printf("[IOc] Disconnected!\n");
-      break;
-    
-    case sIOtype_CONNECT:
-      Serial.printf("[IOc] Connected to url: %s\n", payload);
-      // join default namespace (no auto join in Socket.IO v3)
-      socketIO.send(sIOtype_CONNECT, "/");
+void socketIOEvent(socketIOmessageType_t type, uint8_t *payload,
+                   size_t length) {
+  switch (type) {
+  case sIOtype_DISCONNECT:
+    Serial.printf("[IOc] Disconnected!\n");
+    isSocketConnected = false;
+    lastSocketDisconnectTime = millis(); // Mark failover countdown
+    break;
 
-      // Register MAC with server
-      {
-        DynamicJsonDocument doc(256);
-        JsonArray array = doc.to<JsonArray>();
-        array.add("esp32_register");
-        JsonObject param1 = array.createNestedObject();
-        param1["mac"] = macAddress;
-        
-        String output;
-        serializeJson(doc, output);
-        socketIO.sendEVENT(output);
-        Serial.println("[IOc] Sent esp32_register event");
-      }
-      break;
-      
-    case sIOtype_EVENT:
-      {
-        Serial.printf("[IOc] get event: %s\n", payload);
-        
-        // Parse incoming JSON
-        DynamicJsonDocument doc(1024);
-        DeserializationError error = deserializeJson(doc, payload);
-        
-        if (!error) {
-          const char* eventName = doc[0];
-          
-          if (strcmp(eventName, "esptarget_cmd_dial") == 0 && !isSimBusy) {
-            String phone = doc[1]["phone"].as<String>();
-            Serial.println("[MANUAL] Dialing: " + phone);
-            isSimBusy = true;
-            sim800l.print("ATD"); sim800l.print(phone); sim800l.println(";");
-            isSimBusy = false;
-          }
-          else if (strcmp(eventName, "esptarget_cmd_hangup") == 0) {
-            Serial.println("[MANUAL] Hang Up");
-            isSimBusy = true;
-            sim800l.println("ATH");
-            isSimBusy = false;
-          }
-          else if (strcmp(eventName, "esptarget_cmd_ussd") == 0 && !isSimBusy) {
-            String code = doc[1]["code"].as<String>();
-            Serial.println("[MANUAL] USSD: " + code);
-            isSimBusy = true;
-            while(sim800l.available()) sim800l.read();
-            
-            sim800l.print("AT+CUSD=1,\""); sim800l.print(code); sim800l.println("\",15");
-            
-            String ussdResponse = "Timeout or Error";
-            unsigned long start = millis();
-            String tb = "";
-            while (millis() - start < 15000) {
-              while (sim800l.available()) { char c = sim800l.read(); tb += c; }
-              if (tb.indexOf("+CUSD:") != -1 && tb.indexOf("\"", tb.indexOf("+CUSD:") + 7) != -1) {
-                delay(100); while (sim800l.available()) tb += (char)sim800l.read();
-                ussdResponse = tb; break;
-              }
-            }
-            isSimBusy = false;
+  case sIOtype_CONNECT:
+    Serial.printf("[IOc] Connected to url: %s\n", payload);
+    isSocketConnected = true;
+    // join default namespace (no auto join in Socket.IO v3)
+    socketIO.send(sIOtype_CONNECT, "/");
 
-            DynamicJsonDocument resDoc(512);
-            JsonArray array = resDoc.to<JsonArray>();
-            array.add("esp32_cmd_result");
-            JsonObject resObj = array.createNestedObject();
-            resObj["type"] = "ussd";
-            resObj["data"] = ussdResponse;
-            String out; serializeJson(resDoc, out);
-            socketIO.sendEVENT(out);
+    // Register MAC with server
+    {
+      DynamicJsonDocument doc(256);
+      JsonArray array = doc.to<JsonArray>();
+      array.add("esp32_register");
+      JsonObject param1 = array.createNestedObject();
+      param1["mac"] = macAddress;
+
+      String output;
+      serializeJson(doc, output);
+      socketIO.sendEVENT(output);
+      Serial.println("[IOc] Sent esp32_register event");
+    }
+    break;
+
+  case sIOtype_EVENT: {
+    Serial.printf("[IOc] get event: %s\n", payload);
+
+    // Parse incoming JSON
+    DynamicJsonDocument doc(1024);
+    DeserializationError error = deserializeJson(doc, payload);
+
+    if (!error) {
+      const char *eventName = doc[0];
+
+      if (strcmp(eventName, "esptarget_cmd_dial") == 0 && !isSimBusy) {
+        String phone = doc[1]["phone"].as<String>();
+        Serial.println("[MANUAL] Dialing: " + phone);
+        isSimBusy = true;
+        sim800l.print("ATD");
+        sim800l.print(phone);
+        sim800l.println(";");
+        isSimBusy = false;
+      } else if (strcmp(eventName, "esptarget_cmd_hangup") == 0) {
+        Serial.println("[MANUAL] Hang Up");
+        isSimBusy = true;
+        sim800l.println("ATH");
+        isSimBusy = false;
+      } else if (strcmp(eventName, "esptarget_cmd_ussd") == 0 && !isSimBusy) {
+        String code = doc[1]["code"].as<String>();
+        Serial.println("[MANUAL] USSD: " + code);
+        isSimBusy = true;
+        while (sim800l.available())
+          sim800l.read();
+
+        sim800l.print("AT+CUSD=1,\"");
+        sim800l.print(code);
+        sim800l.println("\",15");
+
+        String ussdResponse = "Timeout or Error";
+        unsigned long start = millis();
+        String tb = "";
+        while (millis() - start < 15000) {
+          while (sim800l.available()) {
+            char c = sim800l.read();
+            tb += c;
           }
-          else if (strcmp(eventName, "esptarget_cmd_sendsms") == 0 && !isSimBusy) {
-            String phone = doc[1]["phone"].as<String>();
-            String text = doc[1]["message"].as<String>();
-            Serial.println("[MANUAL] Splitting SMS to: " + phone);
-            isSimBusy = true;
-            sim800l.println("AT+CMGF=1");
+          if (tb.indexOf("+CUSD:") != -1 &&
+              tb.indexOf("\"", tb.indexOf("+CUSD:") + 7) != -1) {
             delay(100);
-            sim800l.print("AT+CMGS=\""); sim800l.print(phone); sim800l.println("\"");
-            delay(100);
-            sim800l.print(text);
-            delay(100);
-            sim800l.write(26); // ^Z
-            isSimBusy = false;
-          }
-          else if (strcmp(eventName, "esptarget_cmd_flightmode") == 0 && !isSimBusy) {
-            bool turnOn = doc[1]["state"].as<bool>();
-            isSimBusy = true;
-            if(turnOn) {
-              Serial.println("[MANUAL] Flight Mode ON");
-              sim800l.println("AT+CFUN=4");
-            } else {
-              Serial.println("[MANUAL] Flight Mode OFF");
-              sim800l.println("AT+CFUN=1");
-            }
-            isSimBusy = false;
-          }
-          else if (strcmp(eventName, "esptarget_cmd_reboot") == 0) {
-            Serial.println("[MANUAL] REBOOTING ESP32 System...");
-            delay(500);
-            ESP.restart();
-          }
-          else if (strcmp(eventName, "execute_call") == 0 && !isSimBusy) {
-            String jobId = doc[1]["job_id"].as<String>();
-            String phone = doc[1]["phone_to_call"].as<String>();
-            
-            Serial.println("\n[SERVER JOB] New call requested: " + phone);
-            isSimBusy = true;
-            
-            // Clear SIM buffer
-            while(sim800l.available()) sim800l.read();
-            
-            // Make the call
-            sim800l.print("ATD");
-            sim800l.print(phone);
-            sim800l.println(";");
-            
-            String resultStatus = "success"; 
-            unsigned long callStart = millis();
-            String simResponse = "";
-            bool callOngoing = true;
-            bool wasReceived = false;
-
-            Serial.println("Dialing... waiting up to 30s...");
-            unsigned long lastClccPoll = millis();
-
-            while(millis() - callStart < 30000 && callOngoing) {
-              while(sim800l.available()) {
-                char c = sim800l.read();
-                simResponse += c;
-                Serial.write(c);
-              }
-              
-              if(simResponse.indexOf("BUSY") != -1) {
-                resultStatus = "busy"; // Remote user rejected
-                callOngoing = false;
-              }
-              else if(simResponse.indexOf("ERROR") != -1) {
-                resultStatus = "hardware_error"; // Modem error
-                callOngoing = false;
-              }
-              else if(simResponse.indexOf("NO CARRIER") != -1) {
-                // If NO CARRIER very fast (less than 5 sec), network disconnected instantly (unreachable)
-                if (millis() - callStart < 5000) resultStatus = "unreachable";
-                else resultStatus = "success"; // It rang successfully but was disconnected later
-                callOngoing = false;
-              }
-              else if(simResponse.indexOf("NO ANSWER") != -1) {
-                 resultStatus = "success"; // Rang successfully but didn't pick up
-                 callOngoing = false;
-              }
-
-              // Poll AT+CLCC every 2.5 seconds to see if it was picked up
-              if (millis() - lastClccPoll > 2500 && callOngoing) {
-                 sim800l.println("AT+CLCC");
-                 lastClccPoll = millis();
-              }
-              
-              if(simResponse.indexOf("+CLCC: 1,0,0,0,0") != -1 || simResponse.indexOf("+CLCC: 1,1,0,0,0") != -1) {  // 0 means ACTIVE
-                 wasReceived = true;
-                 resultStatus = "received";
-              }
-
-              // clear big buffer safely
-              if(simResponse.length() > 250) {
-                 simResponse = simResponse.substring(simResponse.length() - 50);
-              }
-            }
-            
-            // Hang up explicitly
-            sim800l.println("ATH");
-            delay(1000);
-            while(sim800l.available()) Serial.write(sim800l.read()); // flush remaining data
-            
-            isSimBusy = false;
-            // Clean up exact statuses overrides if needed
-            if(resultStatus == "success" && wasReceived) resultStatus = "received"; 
-
-            Serial.println("\n[SERVER JOB] Call finished. Status: " + resultStatus);
-
-            // Report result back to server via Socket.io
-            DynamicJsonDocument resDoc(256);
-            JsonArray resArray = resDoc.to<JsonArray>();
-            resArray.add("call_result");
-            JsonObject resObj = resArray.createNestedObject();
-            resObj["job_id"] = jobId;
-            resObj["status"] = resultStatus;
-            
-            String resOutput;
-            serializeJson(resDoc, resOutput);
-            socketIO.sendEVENT(resOutput);
-            Serial.println("[SERVER JOB] Result reported via WebSocket.");
+            while (sim800l.available())
+              tb += (char)sim800l.read();
+            ussdResponse = tb;
+            break;
           }
         }
+        isSimBusy = false;
+
+        DynamicJsonDocument resDoc(512);
+        JsonArray array = resDoc.to<JsonArray>();
+        array.add("esp32_cmd_result");
+        JsonObject resObj = array.createNestedObject();
+        resObj["type"] = "ussd";
+        resObj["data"] = ussdResponse;
+        String out;
+        serializeJson(resDoc, out);
+        socketIO.sendEVENT(out);
+      } else if (strcmp(eventName, "esptarget_cmd_sendsms") == 0 &&
+                 !isSimBusy) {
+        String phone = doc[1]["phone"].as<String>();
+        String text = doc[1]["message"].as<String>();
+        Serial.println("[MANUAL] Splitting SMS to: " + phone);
+        isSimBusy = true;
+        sim800l.println("AT+CMGF=1");
+        delay(100);
+        sim800l.print("AT+CMGS=\"");
+        sim800l.print(phone);
+        sim800l.println("\"");
+        delay(100);
+        sim800l.print(text);
+        delay(100);
+        sim800l.write(26); // ^Z
+        isSimBusy = false;
+      } else if (strcmp(eventName, "esptarget_cmd_flightmode") == 0 &&
+                 !isSimBusy) {
+        bool turnOn = doc[1]["state"].as<bool>();
+        isSimBusy = true;
+        if (turnOn) {
+          Serial.println("[MANUAL] Flight Mode ON");
+          sim800l.println("AT+CFUN=4");
+        } else {
+          Serial.println("[MANUAL] Flight Mode OFF");
+          sim800l.println("AT+CFUN=1");
+        }
+        isSimBusy = false;
+      } else if (strcmp(eventName, "esptarget_cmd_reboot") == 0) {
+        Serial.println("[MANUAL] REBOOTING ESP32 System...");
+        delay(500);
+        ESP.restart();
+      } else if (strcmp(eventName, "execute_call") == 0 && !isSimBusy) {
+        String jobId = doc[1]["job_id"].as<String>();
+        String phone = doc[1]["phone_to_call"].as<String>();
+        String audioTrack = "";
+        if (doc[1].containsKey("audio") && !doc[1]["audio"].isNull()) {
+          audioTrack = doc[1]["audio"].as<String>();
+        }
+
+        Serial.println("\n[SERVER JOB] New call requested: " + phone);
+        if (audioTrack.length() > 0) {
+           Serial.println("Will play audio track: " + audioTrack);
+        }
+        isSimBusy = true;
+
+        // Clear SIM buffer
+        while (sim800l.available())
+          sim800l.read();
+
+        // Make the call
+        sim800l.print("ATD");
+        sim800l.print(phone);
+        sim800l.println(";");
+
+        String resultStatus = "success";
+        unsigned long callStart = millis();
+        String simResponse = "";
+        bool callOngoing = true;
+        bool wasReceived = false;
+        bool audioPlayed = false;
+
+        Serial.println("Dialing... waiting up to 30s...");
+        unsigned long lastClccPoll = millis();
+
+        while (millis() - callStart < 30000 && callOngoing) {
+          while (sim800l.available()) {
+            char c = sim800l.read();
+            simResponse += c;
+            Serial.write(c);
+          }
+
+          if (simResponse.indexOf("BUSY") != -1) {
+            resultStatus = "busy"; // Remote user rejected
+            callOngoing = false;
+          } else if (simResponse.indexOf("ERROR") != -1) {
+            resultStatus = "hardware_error"; // Modem error
+            callOngoing = false;
+          } else if (simResponse.indexOf("NO CARRIER") != -1) {
+            // If NO CARRIER very fast (less than 5 sec), network disconnected
+            // instantly (unreachable)
+            if (millis() - callStart < 5000)
+              resultStatus = "unreachable";
+            else
+              resultStatus =
+                  "success"; // It rang successfully but was disconnected later
+            callOngoing = false;
+          } else if (simResponse.indexOf("NO ANSWER") != -1) {
+            resultStatus = "success"; // Rang successfully but didn't pick up
+            callOngoing = false;
+          }
+
+          // Poll AT+CLCC every 2.5 seconds to see if it was picked up
+          if (millis() - lastClccPoll > 2500 && callOngoing) {
+            sim800l.println("AT+CLCC");
+            lastClccPoll = millis();
+          }
+
+          if (simResponse.indexOf("+CLCC: 1,0,0,0,0") != -1 ||
+              simResponse.indexOf("+CLCC: 1,1,0,0,0") != -1) { // 0 means ACTIVE
+            wasReceived = true;
+            resultStatus = "received";
+
+            if (audioTrack.length() > 0 && !audioPlayed) {
+              int trackNum = audioTrack.toInt();
+              Serial.println("Call active! Playing track: " + String(trackNum));
+              myDFPlayer.play(trackNum);
+              audioPlayed = true;
+            }
+          }
+
+          // clear big buffer safely
+          if (simResponse.length() > 250) {
+            simResponse = simResponse.substring(simResponse.length() - 50);
+          }
+        }
+
+        // Hang up explicitly
+        sim800l.println("ATH");
+        delay(1000);
+        while (sim800l.available())
+          Serial.write(sim800l.read()); // flush remaining data
+
+        isSimBusy = false;
+        // Clean up exact statuses overrides if needed
+        if (resultStatus == "success" && wasReceived)
+          resultStatus = "received";
+
+        Serial.println("\n[SERVER JOB] Call finished. Status: " + resultStatus);
+
+        // Report result back to server via Socket.io
+        DynamicJsonDocument resDoc(256);
+        JsonArray resArray = resDoc.to<JsonArray>();
+        resArray.add("call_result");
+        JsonObject resObj = resArray.createNestedObject();
+        resObj["job_id"] = jobId;
+        resObj["status"] = resultStatus;
+
+        String resOutput;
+        serializeJson(resDoc, resOutput);
+        socketIO.sendEVENT(resOutput);
+        Serial.println("[SERVER JOB] Result reported via WebSocket.");
       }
-      break;
-    case sIOtype_ACK:
-    case sIOtype_ERROR:
-    case sIOtype_BINARY_EVENT:
-    case sIOtype_BINARY_ACK:
-      break;
+    }
+  } break;
+  case sIOtype_ACK:
+  case sIOtype_ERROR:
+  case sIOtype_BINARY_EVENT:
+  case sIOtype_BINARY_ACK:
+    break;
   }
 }
-
 
 void setup() {
   // 1. Initialize Serial Monitors
   Serial.begin(115200);
   sim800l.begin(9600, SERIAL_8N1, SIM800L_RX, SIM800L_TX);
-  
+
+  // DFPlayer Mini Initialization
+  dfSerial.begin(9600, SERIAL_8N1, DFPLAYER_RX, DFPLAYER_TX);
+  Serial.println("Initializing DFPlayer...");
+  if (!myDFPlayer.begin(dfSerial)) {
+    Serial.println("Unable to begin: DFPlayer");
+  } else {
+    myDFPlayer.volume(30); // Set volume value (0~30).
+    Serial.println("DFPlayer Mini online.");
+  }
+
+  pinMode(LED_PIN, OUTPUT);
+
   Serial.println("\n--- Starting ESP32 SIM800L Dashboard ---");
 
   // 2. WiFiManager Initialization
   WiFiManager wm;
-  
+
   // Uncomment the line below to erase saved WiFi credentials (for testing)
   // wm.resetSettings();
 
   Serial.println("Connecting to WiFi via WiFiManager...");
-  // This will try to connect. If it fails, it creates an AP named "ESP32_SIM800_AP"
+  // This will try to connect. If it fails, it creates an AP named
+  // "ESP32_SIM800_AP"
   bool res = wm.autoConnect("ESP32_SIM800_AP");
 
-  if(!res) {
+  if (!res) {
     Serial.println("Failed to connect to WiFi and hit timeout");
     ESP.restart(); // Restart and try again
-  } 
+  }
 
   // Store the ESP32's MAC Address to identify it to the server
   macAddress = WiFi.macAddress();
@@ -576,24 +649,22 @@ void setup() {
   Serial.println(WiFi.localIP());
 
   // 3. Setup Web Server Routing
-  
+
   // Route: Serve the main HTML page
-  server.on("/", HTTP_GET, []() {
-    server.send(200, "text/html", index_html);
-  });
+  server.on("/", HTTP_GET, []() { server.send(200, "text/html", index_html); });
 
   // Route: Make a Call
   server.on("/call", HTTP_GET, []() {
     if (server.hasArg("number")) {
       String num = server.arg("number");
       Serial.println("Web Request: Call " + num);
-      
+
       isSimBusy = true;
       sim800l.print("ATD");
       sim800l.print(num);
       sim800l.println(";"); // Semicolon is required for voice calls
       isSimBusy = false;
-      
+
       server.send(200, "text/plain", "Dialing: " + num);
     } else {
       server.send(400, "text/plain", "Error: No number provided");
@@ -614,11 +685,13 @@ void setup() {
     if (server.hasArg("code")) {
       String code = server.arg("code");
       Serial.println("Web Request: USSD " + code);
-      
+
       isSimBusy = true;
-      
+
       // Clear out any old data from the serial buffer first
-      while(sim800l.available()) { sim800l.read(); }
+      while (sim800l.available()) {
+        sim800l.read();
+      }
 
       // Command to send USSD. '15' is the GSM standard alphabet for USSD.
       sim800l.print("AT+CUSD=1,\"");
@@ -626,10 +699,10 @@ void setup() {
       sim800l.println("\",15");
 
       // Wait up to 15 seconds for the network to reply
-      String ussdReply = waitUSSDResponse(15000); 
-      
+      String ussdReply = waitUSSDResponse(15000);
+
       isSimBusy = false;
-      
+
       server.send(200, "text/plain", ussdReply);
     } else {
       server.send(400, "text/plain", "Error: No USSD code provided");
@@ -638,33 +711,36 @@ void setup() {
 
   // Route: Read All SMS Inbox
   server.on("/sms", HTTP_GET, []() {
-    if(isSimBusy) {
-       server.send(200, "text/plain", "Busy");
-       return;
+    if (isSimBusy) {
+      server.send(200, "text/plain", "Busy");
+      return;
     }
-    
+
     Serial.println("Web Request: Loading SMS Inbox...");
     isSimBusy = true;
-    
-    // AT+CMGL="ALL" reads all saved messages (Read & Unread) from the SIM storage
-    // 8000ms timeout is given so it can read up to 20-30 messages slowly
-    String smsData = sendATCommand("AT+CMGL=\"ALL\"", 8000); 
-    
+
+    // AT+CMGL="ALL" reads all saved messages (Read & Unread) from the SIM
+    // storage 8000ms timeout is given so it can read up to 20-30 messages
+    // slowly
+    String smsData = sendATCommand("AT+CMGL=\"ALL\"", 8000);
+
     isSimBusy = false;
-    
+
     server.send(200, "text/plain", smsData);
   });
 
   // Route: Get Network Status (Operator & Signal)
   server.on("/status", HTTP_GET, []() {
-    // If we are currently dialing or sending USSD, skip checking network to avoid corrupting serial data
-    if(isSimBusy) {
-       server.send(200, "application/json", "{\"operator\":\"Busy...\", \"signal\":\"--\"}");
-       return;
+    // If we are currently dialing or sending USSD, skip checking network to
+    // avoid corrupting serial data
+    if (isSimBusy) {
+      server.send(200, "application/json",
+                  "{\"operator\":\"Busy...\", \"signal\":\"--\"}");
+      return;
     }
-    
+
     isSimBusy = true;
-    
+
     // 1. Get Operator Name (AT+COPS?)
     String opName = "Searching...";
     String copsRes = sendATCommand("AT+COPS?", 2000);
@@ -680,62 +756,66 @@ void setup() {
     int csqIdx = csqRes.indexOf("+CSQ: ");
     if (csqIdx != -1) {
       int commaIdx = csqRes.indexOf(',', csqIdx);
-      if(commaIdx != -1) {
+      if (commaIdx != -1) {
         int csqVal = csqRes.substring(csqIdx + 6, commaIdx).toInt();
-        if (csqVal == 99) sigStr = "No Signal";
-        else sigStr = String((csqVal * 100) / 31) + "%"; // Convert SIM800L 0-31 range to percentage
+        if (csqVal == 99)
+          sigStr = "No Signal";
+        else
+          sigStr = String((csqVal * 100) / 31) +
+                   "%"; // Convert SIM800L 0-31 range to percentage
       }
     }
-    
+
     isSimBusy = false;
 
-    String jsonResponse = "{\"operator\":\"" + opName + "\", \"signal\":\"" + sigStr + "\"}";
+    String jsonResponse =
+        "{\"operator\":\"" + opName + "\", \"signal\":\"" + sigStr + "\"}";
     server.send(200, "application/json", jsonResponse);
   });
 
   // Start the server
   server.begin();
-  
+
   // 4. Initialize Socket.IO connection
-  // Ensure "800lcall.espserver.site" proxy supports wss.
-  String host = "800lcall.espserver.site";
-  socketIO.beginSSL(host, 443, "/socket.io/?EIO=4");
+  socketIO.beginSSL(currentHost, 443, "/socket.io/?EIO=4");
   socketIO.onEvent(socketIOEvent);
 
-  
   // 4. Initialize SIM800L basic settings
-  delay(3000); // Give SIM module time to register to network
+  delay(3000);           // Give SIM module time to register to network
   sim800l.println("AT"); // Wake up/Handshake
   delay(100);
   sim800l.println("AT+CMGF=1"); // Set to text mode
   delay(100);
-  sim800l.println("AT+CNMI=2,2,0,0,0"); // Deliver SMS immediately directly on serial
-  
+  sim800l.println(
+      "AT+CNMI=2,2,0,0,0"); // Deliver SMS immediately directly on serial
+
   // 5. Fetch SIM Phone Number safely by polling the Local Operator MSISDN query
   Serial.println("Identifying SIM Phone Number...");
   sim800l.println("AT+CUSD=1,\"*2#\",15");
   unsigned long msStart = millis();
   String ussdRes = "";
-  while(millis() - msStart < 15000) {
-    while(sim800l.available()) {
+  while (millis() - msStart < 15000) {
+    while (sim800l.available()) {
       char c = sim800l.read();
       ussdRes += c;
     }
-    if(ussdRes.indexOf("+CUSD:") != -1 && ussdRes.indexOf("MSISDN:") != -1) {
+    if (ussdRes.indexOf("+CUSD:") != -1 && ussdRes.indexOf("MSISDN:") != -1) {
       delay(300); // Wait for the whole string to finish
-      while(sim800l.available()) { ussdRes += (char)sim800l.read(); }
-      
+      while (sim800l.available()) {
+        ussdRes += (char)sim800l.read();
+      }
+
       int msisdnIndex = ussdRes.indexOf("MSISDN:");
-      if(msisdnIndex != -1) {
+      if (msisdnIndex != -1) {
         int newlineIdx = ussdRes.indexOf("\n", msisdnIndex);
-        if(newlineIdx != -1) {
-           int quoteIdx = ussdRes.indexOf("\"", newlineIdx);
-           if(quoteIdx != -1) {
-               simPhoneNumber = ussdRes.substring(newlineIdx + 1, quoteIdx);
-               simPhoneNumber.replace("\r", "");
-               simPhoneNumber.trim();
-               Serial.println("Phone Number Identified: " + simPhoneNumber);
-           }
+        if (newlineIdx != -1) {
+          int quoteIdx = ussdRes.indexOf("\"", newlineIdx);
+          if (quoteIdx != -1) {
+            simPhoneNumber = ussdRes.substring(newlineIdx + 1, quoteIdx);
+            simPhoneNumber.replace("\r", "");
+            simPhoneNumber.trim();
+            Serial.println("Phone Number Identified: " + simPhoneNumber);
+          }
         }
       }
       break;
@@ -746,8 +826,9 @@ void setup() {
 void loop() {
   // Handle incoming web client requests
   server.handleClient();
-  
-  // Mirror any unsolicited data from SIM800L to Serial Monitor & Buffer Live SMS
+
+  // Mirror any unsolicited data from SIM800L to Serial Monitor & Buffer Live
+  // SMS
   while (sim800l.available()) {
     char c = sim800l.read();
     Serial.write(c);
@@ -768,28 +849,29 @@ void loop() {
           lastCharTime = millis();
         }
       }
-      
+
       int firstQuote = simBuffer.indexOf("\"", cmtIndex);
       int secondQuote = simBuffer.indexOf("\"", firstQuote + 1);
-      
+
       if (firstQuote != -1 && secondQuote != -1) {
         String senderNum = simBuffer.substring(firstQuote + 1, secondQuote);
-        
+
         int newlineIdx = simBuffer.indexOf("\n", secondQuote);
         if (newlineIdx != -1) {
           // Read up to the end of the acquired string
           String body = simBuffer.substring(newlineIdx + 1);
           body.replace("\r", "");
           body.trim();
-          
-          if(body.length() > 0) {
-            DynamicJsonDocument d(1024); // Support very large Hex bodies securely
+
+          if (body.length() > 0) {
+            DynamicJsonDocument d(
+                1024); // Support very large Hex bodies securely
             JsonArray arr = d.to<JsonArray>();
             arr.add("hardware_incoming_sms");
             JsonObject p = arr.createNestedObject();
             p["sender"] = senderNum;
             p["message"] = body;
-            p["timestamp"] = "-"; 
+            p["timestamp"] = "-";
 
             String output;
             serializeJson(d, output);
@@ -800,12 +882,34 @@ void loop() {
       }
       simBuffer = ""; // Reset buffer after dealing with CMT
     } else if (simBuffer.length() > 1500) {
-      simBuffer = ""; // Prevent memory leak from noise over time, increased to 1500 to allow very long chunks before pruning
+      simBuffer = ""; // Prevent memory leak from noise over time, increased to
+                      // 1500 to allow very long chunks before pruning
     }
   }
 
   // Handle ongoing Socket.IO connection
   socketIO.loop();
+
+  // Failover Check Mechanism
+  if (!isSocketConnected && millis() - lastSocketDisconnectTime > socketFailoverTimeout) {
+    Serial.println("[IOc] Host unresponsive for 20s. Failover triggered! Switching server...");
+    socketIO.disconnect();
+    currentHost = (currentHost == mainHost) ? backupHost : mainHost;
+    socketIO.beginSSL(currentHost, 443, "/socket.io/?EIO=4");
+    lastSocketDisconnectTime = millis(); // Reset countdown timer for the new host
+  }
+
+  // Handle LED based on WiFi status
+  if (WiFi.status() == WL_CONNECTED) {
+    digitalWrite(LED_PIN, HIGH); // LED jolbe
+  } else {
+    // WiFi not connected, LED blinking
+    if (millis() - lastBlinkTime >= blinkInterval) {
+      lastBlinkTime = millis();
+      ledState = !ledState;
+      digitalWrite(LED_PIN, ledState);
+    }
+  }
 
   if (millis() - lastTelemetryTime >= telemetryInterval) {
     lastTelemetryTime = millis();

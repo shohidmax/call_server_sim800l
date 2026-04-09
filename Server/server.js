@@ -226,7 +226,8 @@ const dispatchJobs = async () => {
                 const espSocketId = connectedESP32s.get(mac);
                 io.to(espSocketId).emit('execute_call', {
                     job_id: pendingJob._id.toString(),
-                    phone_to_call: pendingJob.phone
+                    phone_to_call: pendingJob.phone,
+                    audio: pendingJob.audio || null
                 });
                 
                 io.emit('dashboard_update', { type: 'job_update', job: pendingJob });
@@ -297,6 +298,7 @@ const Broadcast = mongoose.model('Broadcast', broadcastSchema);
 const espJobSchema = new mongoose.Schema({
     mac: { type: String, required: false }, // Optional, allowing floating jobs
     phone: { type: String, required: true },
+    audio: { type: String, required: false }, // Track number (e.g. "0001") for DFPlayer
     status: { type: String, enum: ['pending', 'calling', 'success', 'fail', 'failed', 'hardware_error', 'busy', 'received', 'number_off', 'unreachable'], default: 'pending' },
     createdAt: { type: Date, default: Date.now }
 });
@@ -374,9 +376,11 @@ app.post('/api/broadcast', async (req, res) => {
         // 2. Break down the phone list and queue individual jobs for the ESP32
         if (phone_call_list && phone_call_list.length > 0) {
             const assignedMac = mac && mac.trim() !== '' ? mac : null;
+            const audioTrack = payload && payload.audio ? payload.audio : null;
             const jobsToCreate = phone_call_list.map(num => ({
                 mac: assignedMac,
                 phone: num,
+                audio: audioTrack,
                 status: 'pending'
             }));
             const insertedJobs = await EspJob.insertMany(jobsToCreate);
