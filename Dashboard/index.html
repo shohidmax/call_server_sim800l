@@ -476,6 +476,55 @@
             }
         }
 
+        const decodeUCS2 = (str) => {
+            if (!str || typeof str !== 'string' || str.length % 4 !== 0 || !/^[0-9A-Fa-f]+$/.test(str)) {
+                return str; 
+            }
+            let result = '';
+            for (let i = 0; i < str.length; i += 4) {
+                result += String.fromCharCode(parseInt(str.substr(i, 4), 16));
+            }
+            if(/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(result)) return str; 
+            return result;
+        };
+
+        function renderSMS(messages) {
+            const container = document.getElementById('sms-container');
+            if (!container) return;
+
+            if (messages.length === 0) {
+                container.innerHTML = `
+                    <div class="text-slate-500 py-8 text-center border-2 border-dashed border-slate-200 rounded-lg">
+                        <i class="fa-regular fa-message text-2xl mb-2 text-slate-300 block"></i>
+                        No messages yet
+                    </div>`;
+                return;
+            }
+
+            container.innerHTML = messages.map(msg => {
+                const date = new Date(msg.receivedAt || msg.timestamp);
+                const displaySender = decodeUCS2(msg.sender);
+                const displayMessage = decodeUCS2(msg.message);
+
+                return `
+                    <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative group">
+                        <div class="flex justify-between items-start mb-2">
+                            <div class="flex items-center gap-3">
+                                <div class="font-mono text-sm text-slate-500 font-semibold flex items-center gap-2">
+                                    <i class="fa-solid fa-reply fa-flip-both text-slate-300"></i>
+                                    ${displaySender} ${msg.direction === 'in' ? '<span class="bg-blue-100 text-blue-700 text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">in</span>' : '<span class="bg-teal-100 text-teal-700 text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">out</span>'}
+                                </div>
+                            </div>
+                            <div class="text-[10px] uppercase tracking-wider font-bold text-slate-400">
+                                ${date.toLocaleString()}
+                            </div>
+                        </div>
+                        <p class="text-slate-700 whitespace-pre-wrap word-break text-[15px] leading-relaxed pl-6 border-l-2 border-slate-100">${displayMessage}</p>
+                    </div>
+                `;
+            }).join('');
+        }
+
         function renderDevices(devices) {
             const container = document.getElementById('devices-container');
             if (!container) return;
