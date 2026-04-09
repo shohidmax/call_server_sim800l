@@ -106,3 +106,9 @@ Base URL: https://sim800l.maxapi.esp32.site
 13. `hardware_incoming_sms` (Hardware -> Server)
     - Triggers instantly when SIM800L receives a new SMS text.
     - Payload: `{ "sender": "+8801...", "message": "Hi Admin", "timestamp": "-" }`
+14. `execute_call` (Server -> Hardware)
+    - Dispatched by the job queue to instruct an ESP32 to start an automated call sequence. Includes target audio track for the DFPlayer Mini.
+    - Payload: `{ "job_id": "mongodb_id_123", "phone_to_call": "+8801700000000", "audio": "0001" }`
+15. `call_result` (Hardware -> Server)
+    - Sent by the ESP32 after an automated call attempt finishes to report the final status.
+    - Payload: `{ "job_id": "mongodb_id_123", "status": "success" }`

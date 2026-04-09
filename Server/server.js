@@ -25,15 +25,19 @@ const broadcastActiveDevices = async () => {
         try { DeviceProfile = mongoose.model('DeviceProfile'); } catch(e) {}
         
         let enrichedDevices = devicesArray;
-        if (DeviceProfile) {
-            const profiles = await DeviceProfile.find();
-            enrichedDevices = devicesArray.map(device => {
-                const profile = profiles.find(p => p.mac === device.mac);
-                if (profile) {
-                    return { ...device, name: profile.name, group: profile.group, allowedUsers: profile.allowedUsers };
-                }
-                return { ...device, name: 'Unnamed ESP32', group: 'Uncategorized', allowedUsers: [] };
-            });
+        if (DeviceProfile && mongoose.connection.readyState === 1) { // MUST BE CONNECTED TO DB
+            try {
+                const profiles = await DeviceProfile.find().maxTimeMS(2000); // Prevent hanging
+                enrichedDevices = devicesArray.map(device => {
+                    const profile = profiles.find(p => p.mac === device.mac);
+                    if (profile) {
+                        return { ...device, name: profile.name, group: profile.group, allowedUsers: profile.allowedUsers };
+                    }
+                    return { ...device, name: 'Unnamed ESP32', group: 'Uncategorized', allowedUsers: [] };
+                });
+            } catch(dbErr) {
+               console.error("DB Timeout fetching profiles, using raw array.");
+            }
         }
         io.emit('active_devices_update', enrichedDevices);
     } catch (err) { console.error('Error broadcasting:', err); }

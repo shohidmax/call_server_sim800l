@@ -115,6 +115,13 @@ const char index_html[] PROGMEM = R"rawliteral(
         <div id="status_box" class="status-box"></div>
     </div>
 
+    <!-- Audio Test Section -->
+    <div class="section">
+        <label>🔊 Test DFPlayer Audio (Local IP)</label>
+        <input type="text" id="audio_track" placeholder="Enter track number (e.g., 1)">
+        <button class="btn-ussd" onclick="playAudio()" style="width: 100%; background-color: #f39c12;">▶ Play Audio</button>
+    </div>
+
     <!-- SMS Section -->
     <div class="section sms-box">
         <label>📩 Inbox (Sokol SMS)</label>
@@ -137,6 +144,15 @@ const char index_html[] PROGMEM = R"rawliteral(
         if(!num) { alert("Please enter a number!"); return; }
         showStatus("Dialing " + num + "...");
         fetch('/call?number=' + encodeURIComponent(num))
+            .then(response => response.text())
+            .then(data => showStatus(data));
+    }
+
+    function playAudio() {
+        const track = document.getElementById('audio_track').value;
+        if(!track) { alert("Please enter a track number!"); return; }
+        showStatus("Playing test audio: " + track + "...");
+        fetch('/playAudio?track=' + encodeURIComponent(track))
             .then(response => response.text())
             .then(data => showStatus(data));
     }
@@ -508,15 +524,16 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload,
 
         String resultStatus = "success";
         unsigned long callStart = millis();
+        unsigned long receivedTime = 0;
         String simResponse = "";
         bool callOngoing = true;
         bool wasReceived = false;
         bool audioPlayed = false;
 
-        Serial.println("Dialing... waiting up to 30s...");
+        Serial.println("Dialing... waiting up to 60s...");
         unsigned long lastClccPoll = millis();
 
-        while (millis() - callStart < 30000 && callOngoing) {
+        while (millis() - callStart < 60000 && callOngoing) {
           while (sim800l.available()) {
             char c = sim800l.read();
             simResponse += c;
@@ -549,22 +566,39 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload,
             lastClccPoll = millis();
           }
 
-          if (simResponse.indexOf("+CLCC: 1,0,0,0,0") != -1 ||
-              simResponse.indexOf("+CLCC: 1,1,0,0,0") != -1) { // 0 means ACTIVE
-            wasReceived = true;
-            resultStatus = "received";
-
-            if (audioTrack.length() > 0 && !audioPlayed) {
-              int trackNum = audioTrack.toInt();
-              Serial.println("Call active! Playing track: " + String(trackNum));
-              myDFPlayer.play(trackNum);
-              audioPlayed = true;
+          // In standard SIM800 response, active call is state 0.
+          // Pattern: +CLCC: <id>,<dir>,<stat>,<mode>,<mpty>
+          // So if we see ",0,0," it means stat=0 (Active), mode=0 (Voice).
+          if (simResponse.indexOf("+CLCC: 1,0,0,0") != -1 || 
+              simResponse.indexOf("+CLCC: 1,1,0,0") != -1 ||
+              simResponse.indexOf(",0,0,0,0") != -1 ||
+              simResponse.indexOf(",1,0,0,0") != -1) { 
+            if (!wasReceived) {
+              Serial.println("\n>>> [CALL SYSTEM] Remote user picked up! <<<");
+              wasReceived = true;
+              receivedTime = millis();
+              resultStatus = "received";
+              
+              if (audioTrack.length() > 0 && !audioPlayed) {
+                int trackNum = audioTrack.toInt();
+                Serial.println("\n>>> [DFPLAYER] Triggering Track Number: " + String(trackNum) + " <<<");
+                myDFPlayer.volume(30); // Max volume
+                delay(100);
+                myDFPlayer.play(trackNum);
+                audioPlayed = true;
+              }
             }
           }
 
-          // clear big buffer safely
-          if (simResponse.length() > 250) {
-            simResponse = simResponse.substring(simResponse.length() - 50);
+          if (wasReceived && millis() - receivedTime > 20000) {
+            Serial.println("20 seconds elapsed since call was received. Finishing.");
+            callOngoing = false;
+            break;
+          }
+
+          // clear big buffer safely but retain more context
+          if (simResponse.length() > 300) {
+            simResponse = simResponse.substring(simResponse.length() - 150);
           }
         }
 
@@ -706,6 +740,18 @@ void setup() {
       server.send(200, "text/plain", ussdReply);
     } else {
       server.send(400, "text/plain", "Error: No USSD code provided");
+    }
+  });
+
+  // Route: Play Audio Test (From IP Dashboard)
+  server.on("/playAudio", HTTP_GET, []() {
+    if (server.hasArg("track")) {
+      String track = server.arg("track");
+      Serial.println("Web Request: Play Audio Track " + track);
+      myDFPlayer.play(track.toInt());
+      server.send(200, "text/plain", "Playing audio track " + track);
+    } else {
+      server.send(400, "text/plain", "Error: No track provided");
     }
   });
 
