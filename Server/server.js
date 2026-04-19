@@ -379,7 +379,7 @@ app.post('/api/broadcast', async (req, res) => {
 
         // 2. Break down the phone list and queue individual jobs for the ESP32
         if (phone_call_list && phone_call_list.length > 0) {
-            const assignedMac = mac && mac.trim() !== '' ? mac : null;
+            const assignedMac = mac && mac.trim() !== '' ? mac.trim() : null;
             const audioTrack = payload && payload.audio ? payload.audio : null;
             const jobsToCreate = phone_call_list.map(num => ({
                 mac: assignedMac,

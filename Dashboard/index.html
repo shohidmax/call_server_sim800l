@@ -633,8 +633,8 @@
         function getCtrlMac() { return document.getElementById('ctrl-target-mac').value; }
         
         function manualDial() {
-            const mac = getCtrlMac();
-            const phone = document.getElementById('ctrl-phone').value;
+            const mac = getCtrlMac().trim();
+            const phone = document.getElementById('ctrl-phone').value.trim();
             if(!mac || !phone) { alert("Enter both Target MAC and Phone number"); return; }
             socket.emit('dashboard_cmd_dial', { mac, phone });
         }
@@ -644,8 +644,8 @@
             socket.emit('dashboard_cmd_hangup', { mac });
         }
         function manualUssd() {
-            const mac = getCtrlMac();
-            const code = document.getElementById('ctrl-ussd').value;
+            const mac = getCtrlMac().trim();
+            const code = document.getElementById('ctrl-ussd').value.trim();
             if(!mac || !code) return;
             document.getElementById('btn-ussd').disabled = true;
             document.getElementById('btn-ussd').innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Processing...';
@@ -655,9 +655,9 @@
         
         function sendSms(e) {
             e.preventDefault();
-            const mac = document.getElementById('sms_target_mac').value;
-            const phone = document.getElementById('sms_phone').value;
-            const msg = document.getElementById('sms_message').value;
+            const mac = document.getElementById('sms_target_mac').value.trim();
+            const phone = document.getElementById('sms_phone').value.trim();
+            const msg = document.getElementById('sms_message').value.trim();
             
             socket.emit('dashboard_send_sms', { mac, phone, message: msg });
             document.getElementById('sms_message').value = "";
@@ -956,7 +956,7 @@
             const payload = {
                 user_id: document.getElementById('b_userid').value,
                 phone: "Admin Panel", // Originating phone
-                mac: document.getElementById('b_mac').value,
+                mac: document.getElementById('b_mac').value.trim(),
                 phone_call_list: phoneList,
                 payload: {
                     address: document.getElementById('b_address').value,
@@ -1064,9 +1064,9 @@
             const users = usersStr ? usersStr.split(',').map(u => u.trim()).filter(Boolean) : [];
 
             const payload = {
-                mac: document.getElementById('reg_mac').value,
-                name: document.getElementById('reg_name').value || 'Unnamed ESP32',
-                group: document.getElementById('reg_group').value || 'Uncategorized',
+                mac: document.getElementById('reg_mac').value.trim(),
+                name: document.getElementById('reg_name').value.trim() || 'Unnamed ESP32',
+                group: document.getElementById('reg_group').value.trim() || 'Uncategorized',
                 allowedUsers: users
             };
 
