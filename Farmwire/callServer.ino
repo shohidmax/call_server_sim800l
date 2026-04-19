@@ -566,50 +566,35 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload,
             lastClccPoll = millis();
           }
 
-          // Extract state safely from the latest +CLCC response if present
-          int clccIdx = simResponse.lastIndexOf("+CLCC:");
-          if (clccIdx != -1) {
-            // Count commas to find the <stat> field which is the 3rd parameter.
-            // Format: +CLCC: <id>,<dir>,<stat>,<mode>,<mpty>
-            int firstComma = simResponse.indexOf(',', clccIdx);
-            if (firstComma != -1) {
-               int secondComma = simResponse.indexOf(',', firstComma + 1);
-               if (secondComma != -1) {
-                  int thirdComma = simResponse.indexOf(',', secondComma + 1);
-                  if (thirdComma != -1) {
-                     String statStr = simResponse.substring(secondComma + 1, thirdComma);
-                     statStr.trim();
-                     if (statStr == "0") { // 0 means ACTIVE (connected)
-                        if (!wasReceived) {
-                          Serial.println("\n>>> [CALL SYSTEM] Remote user picked up! (Status = 0) <<<");
-                          wasReceived = true;
-                          receivedTime = millis();
-                          resultStatus = "received";
-                          
-                          if (audioTrack.length() > 0 && !audioPlayed) {
-                            int trackNum = audioTrack.toInt();
-                            Serial.println("\n>>> [DFPLAYER] Waiting 1 second to clear voice path... <<<");
-                            delay(1000); // Wait 1 second (1000ms) for real-time voice channel to fully open
-                            Serial.println("\n>>> [DFPLAYER] Triggering Track Number: " + String(trackNum) + " <<<");
-                            myDFPlayer.volume(30); // Max volume
-                            myDFPlayer.play(trackNum);
-                            audioPlayed = true;
-                          }
-                        }
-                     }
-                  }
-               }
-            }
-            
-            // Clear the buffer of the old CLCC once parsed so we don't double parse
-            simResponse = simResponse.substring(clccIdx + 10);
-            if(simResponse.length() > 200) simResponse = ""; 
+          // Use simple robust matching since Serial bytes can stream slowly and split CSV parsing
+          if (simResponse.indexOf(",0,0,0,0") != -1 || simResponse.indexOf(",1,0,0,0") != -1 || simResponse.indexOf("+CLCC: 1,0,0,0") != -1) {
+             if (!wasReceived) {
+                Serial.println("\n>>> [CALL SYSTEM] Remote user picked up! (Status = 0) <<<");
+                wasReceived = true;
+                receivedTime = millis();
+                resultStatus = "received";
+                
+                if (audioTrack.length() > 0 && !audioPlayed) {
+                  int trackNum = audioTrack.toInt();
+                  Serial.println("\n>>> [DFPLAYER] Waiting 1 second to clear voice path... <<<");
+                  delay(1000); // Wait 1 second (1000ms) for real-time voice channel to fully open
+                  Serial.println("\n>>> [DFPLAYER] Triggering Track Number: " + String(trackNum) + " <<<");
+                  myDFPlayer.volume(30); // Max volume
+                  myDFPlayer.play(trackNum);
+                  audioPlayed = true;
+                }
+             }
           }
 
           if (wasReceived && millis() - receivedTime > 20000) {
             Serial.println("20 seconds elapsed since call was received. Finishing.");
             callOngoing = false;
             break;
+          }
+          
+          // Clear buffer safely once it gets too big (e.g. after multiple AT+CLCC calls)
+          if(simResponse.length() > 300) {
+             simResponse = simResponse.substring(simResponse.length() - 150);
           }
         }
 

@@ -379,7 +379,10 @@
     <!-- App Logic -->
     <script>
         // CONFIGURATION
-        const API_BASE = 'https://800lcall.espserver.site/api';
+        const MAIN_HOST = 'https://800lcall.espserver.site';
+        const BACKUP_HOST = 'https://sim800l.maxapi.esp32.site';
+        let currentHost = MAIN_HOST;
+        let API_BASE = `${currentHost}/api`;
         let usingMockData = false;
         let liveJobs = []; // Local tracking
         let liveSms = []; // Local tracking
@@ -391,67 +394,95 @@
         macDatalist.id = 'mac-datalist';
         document.body.appendChild(macDatalist);
 
-        // --- Socket.IO Setup ---
-        const socket = io('https://800lcall.espserver.site');
+        // --- Socket.IO Setup & Failover logic ---
+        let socket;
+        let connectFailures = 0;
 
-        socket.on('connect', () => {
-            console.log("Connected to WebSocket Server");
-        });
+        function initSocketAndListeners() {
+            if(socket) socket.disconnect();
+            socket = io(currentHost);
 
-        socket.on('dashboard_update', (data) => {
-            if (usingMockData) return;
-            
-            if (data.type === 'new_jobs') {
-                liveJobs = [...data.jobs, ...liveJobs];
-            } else if (data.type === 'job_update') {
-                const index = liveJobs.findIndex(j => j._id === data.job._id);
-                if (index !== -1) {
-                    liveJobs[index] = data.job; // Update existing
-                } else {
-                    liveJobs.unshift(data.job); // Add if new
-                }
-            }
-            renderQueueTable(liveJobs);
-            updateStats(liveJobs, liveSms);
-        });
+            socket.on('connect', () => {
+                console.log("Connected to WebSocket Server: " + currentHost);
+                connectFailures = 0;
+            });
 
-        socket.on('sms_update', (data) => {
-            if (usingMockData) return;
-            
-            if (data.type === 'new_sms') {
-                liveSms.unshift(data.sms);
-                applySmsFilter(); // Use filter wrapper
-                document.getElementById('stat-sms-total').innerText = liveSms.length;
-            }
-        });
-
-        socket.on('active_devices_update', (devices) => {
-            console.log("Socket: active_devices_update received", devices);
-            if (usingMockData) return;
-            // Update the global list with newly received devices
-            devices.forEach(newDev => {
-                const existingIdx = activeDevicesList.findIndex(d => d.mac === newDev.mac);
-                if (existingIdx !== -1) {
-                    activeDevicesList[existingIdx] = { ...activeDevicesList[existingIdx], ...newDev };
-                } else {
-                    activeDevicesList.push(newDev);
+            socket.on('connect_error', () => {
+                connectFailures++;
+                console.log("Socket connection failed. Attempts: " + connectFailures);
+                
+                if (connectFailures >= 2) {
+                    currentHost = (currentHost === MAIN_HOST) ? BACKUP_HOST : MAIN_HOST;
+                    API_BASE = `${currentHost}/api`;
+                    console.log("Failover triggered! Switching dashboard host to: " + currentHost);
+                    connectFailures = 0;
+                    initSocketAndListeners(); // Spawns new socket and binds
+                    fetchData(); // Trigger fresh HTTP fetch with new API_BASE
                 }
             });
-            updateUI();
-        });
 
-        // Fallback: If device sends direct telemetry, ensure it shows up immediately
-        socket.on('telemetry_update', (data) => {
-            console.log("Socket: telemetry_update received", data);
-            if (usingMockData) return;
-            const existingIdx = activeDevicesList.findIndex(d => d.mac === data.mac);
-            if (existingIdx !== -1) {
-                activeDevicesList[existingIdx] = { ...activeDevicesList[existingIdx], ...data };
-            } else {
-                activeDevicesList.push(data);
-            }
-            updateUI();
-        });
+            socket.on('dashboard_update', (data) => {
+                if (usingMockData) return;
+                
+                if (data.type === 'new_jobs') {
+                    liveJobs = [...data.jobs, ...liveJobs];
+                } else if (data.type === 'job_update') {
+                    const index = liveJobs.findIndex(j => j._id === data.job._id);
+                    if (index !== -1) {
+                        liveJobs[index] = data.job; // Update existing
+                    } else {
+                        liveJobs.unshift(data.job); // Add if new
+                    }
+                }
+                renderQueueTable(liveJobs);
+                updateStats(liveJobs, liveSms);
+            });
+
+            socket.on('sms_update', (data) => {
+                if (usingMockData) return;
+                
+                if (data.type === 'new_sms') {
+                    liveSms.unshift(data.sms);
+                    applySmsFilter(); // Use filter wrapper
+                    document.getElementById('stat-sms-total').innerText = liveSms.length;
+                }
+            });
+
+            socket.on('active_devices_update', (devices) => {
+                console.log("Socket: active_devices_update received", devices);
+                if (usingMockData) return;
+                // The server's array is the single source of truth and contains all active telemetry
+                activeDevicesList = devices;
+                updateUI();
+            });
+
+            // Fallback: If device sends direct telemetry, ensure it shows up immediately
+            socket.on('telemetry_update', (data) => {
+                console.log("Socket: telemetry_update received", data);
+                if (usingMockData) return;
+                const existingIdx = activeDevicesList.findIndex(d => d.mac === data.mac);
+                if (existingIdx !== -1) {
+                    activeDevicesList[existingIdx] = { ...activeDevicesList[existingIdx], ...data };
+                } else {
+                    activeDevicesList.push(data);
+                }
+                updateUI();
+            });
+            
+            // Reattach manual command result listeners here so they aren't lost
+            socket.on('dashboard_cmd_result', (data) => {
+                 if (data.type === 'ussd') {
+                      const box = document.getElementById('ctrl-ussd-status');
+                      box.classList.remove('hidden');
+                      box.innerText = data.data;
+                      const btn = document.getElementById('btn-ussd');
+                      btn.innerHTML = 'Send Code';
+                      btn.disabled = false;
+                 }
+            });
+        }
+        
+        initSocketAndListeners();
 
         function updateUI() {
             document.getElementById('stat-active-devices').innerText = activeDevicesList.length;
@@ -586,17 +617,7 @@
             `).join('');
         }
 
-        // Listen for manual cmd results
-        socket.on('dashboard_cmd_result', (data) => {
-             if (data.type === 'ussd') {
-                  const box = document.getElementById('ctrl-ussd-status');
-                  box.classList.remove('hidden');
-                  box.innerText = data.data;
-                  const btn = document.getElementById('btn-ussd');
-                  btn.innerHTML = 'Send Code';
-                  btn.disabled = false;
-             }
-        });
+        // List of manual cmd results are now handled inside initSocketAndListeners()
 
         // --- Modal Control Functions ---
         function openControlModal(mac = '') {
