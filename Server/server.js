@@ -156,6 +156,7 @@ io.on('connection', (socket) => {
     // ESP32 Telemetry Relay
     socket.on('esp32_telemetry', (data) => {
         if (data.mac) {
+            connectedESP32s.set(data.mac, socket.id);
             data.lastSeen = Date.now();
             data.status = 'online';
             const existing = activeDeviceTelemetry.get(data.mac) || {};
@@ -364,11 +365,13 @@ setInterval(() => {
                 }
             }
             if (!isSocketAlive && !dev.isCloudNode) {
-                dev.status = 'offline';
-                dev.lastOffline = dev.lastSeen || now;
-                changed = true;
-                console.log(`⏱️ Watchdog: Local device ${mac} disconnected. Marked OFFLINE.`);
-                io.emit('telemetry_update', { mac, status: 'offline', lastOffline: dev.lastOffline });
+                if (!dev.lastSeen || (now - dev.lastSeen > 35000)) {
+                    dev.status = 'offline';
+                    dev.lastOffline = dev.lastSeen || now;
+                    changed = true;
+                    console.log(`⏱️ Watchdog: Local device ${mac} inactive. Marked OFFLINE.`);
+                    io.emit('telemetry_update', { mac, status: 'offline', lastOffline: dev.lastOffline });
+                }
             } else if (dev.lastSeen && (now - dev.lastSeen > 90000)) {
                 dev.status = 'offline';
                 dev.lastOffline = dev.lastSeen;

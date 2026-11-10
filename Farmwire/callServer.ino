@@ -29,11 +29,13 @@ bool isSimBusy = false; // Prevents command collisions
 
 // --- BACKEND SERVER SETTINGS ---
 // Primary cloud cluster host: sim800l.maxapi.esp32.site (active, healthy)
-// Secondary backup host: 800lcall.espserver.site
 String mainHost = "sim800l.maxapi.esp32.site";
-String backupHost = "800lcall.espserver.site";
+String backupHost = "sim800l.maxapi.esp32.site";
 String currentHost = mainHost;
 bool isSocketConnected = false;
+bool needInitialTelemetry = false;
+bool needRegister = false;
+unsigned long registerWaitTime = 0;
 unsigned long lastSocketDisconnectTime = 0;
 const unsigned long socketFailoverTimeout = 35000; // 35 seconds
 int connectionFailures = 0;
@@ -325,6 +327,7 @@ String executeUSSD(String code) {
   bool retriedDcs = false;
 
   while (millis() - startWait < 20000) {
+    socketIO.loop(); // Keeps Socket.IO WebSocket alive during USSD wait
     while (sim800l.available()) {
       char c = sim800l.read();
       buffer += c;
@@ -431,6 +434,7 @@ String sendATCommand(String cmd, uint32_t timeout) {
   sim800l.println(cmd);
   uint32_t t = millis();
   while (millis() - t < timeout) {
+    socketIO.loop(); // Keeps Socket.IO WebSocket alive during AT command wait
     while (sim800l.available()) {
       response += (char)sim800l.read();
     }
@@ -485,6 +489,7 @@ void sendTelemetry() {
   payload["sim_operator"] = opName;
   payload["sim_signal"] = sigStr;
   payload["sim_number"] = simPhoneNumber;
+  payload["status"] = "online";
 
   String output;
   serializeJson(doc, output);
@@ -498,6 +503,7 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload,
   case sIOtype_DISCONNECT:
     Serial.printf("[IOc] Disconnected from: %s\n", currentHost.c_str());
     isSocketConnected = false;
+    needRegister = false;
     connectionFailures++;
     if (lastSocketDisconnectTime == 0) lastSocketDisconnectTime = millis();
     break;
@@ -505,6 +511,7 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload,
   case sIOtype_ERROR:
     Serial.printf("[IOc] Socket/SSL Error on %s: %s\n", currentHost.c_str(), payload);
     isSocketConnected = false;
+    needRegister = false;
     connectionFailures++;
     if (lastSocketDisconnectTime == 0) lastSocketDisconnectTime = millis();
     break;
@@ -514,28 +521,21 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload,
     isSocketConnected = true;
     lastSocketDisconnectTime = 0;
     connectionFailures = 0;
-    // join default namespace (no auto join in Socket.IO v3)
+
+    // In Socket.IO v4, send CONNECT packet to join default namespace "/"
     socketIO.send(sIOtype_CONNECT, "/");
-
-    // Register MAC with server
-    {
-      DynamicJsonDocument doc(256);
-      JsonArray array = doc.to<JsonArray>();
-      array.add("esp32_register");
-      JsonObject param1 = array.createNestedObject();
-      param1["mac"] = macAddress;
-      param1["ip"] = WiFi.localIP().toString();
-
-      String output;
-      serializeJson(doc, output);
-      socketIO.sendEVENT(output);
-      Serial.println("[IOc] Sent esp32_register event: " + macAddress);
-    }
-    // Immediately emit initial telemetry to mark device online on server
-    sendTelemetry();
+    needRegister = true;
+    registerWaitTime = millis();
     break;
 
   case sIOtype_EVENT: {
+    // Quickly ignore broad dashboard broadcasts to keep ESP32 responsive and prevent buffer overflows
+    if (strstr((char*)payload, "active_devices_update") != NULL ||
+        strstr((char*)payload, "telemetry_update") != NULL ||
+        strstr((char*)payload, "sms_update") != NULL) {
+      break;
+    }
+
     Serial.printf("[IOc] get event: %s\n", payload);
 
     // Parse incoming JSON
@@ -1039,6 +1039,29 @@ void loop() {
 
   // Handle ongoing Socket.IO connection
   socketIO.loop();
+
+  // Send registration 300ms after namespace connection to ensure server is ready
+  if (needRegister && isSocketConnected && (millis() - registerWaitTime >= 300)) {
+    needRegister = false;
+    DynamicJsonDocument doc(256);
+    JsonArray array = doc.to<JsonArray>();
+    array.add("esp32_register");
+    JsonObject param1 = array.createNestedObject();
+    param1["mac"] = macAddress;
+    param1["ip"] = WiFi.localIP().toString();
+
+    String output;
+    serializeJson(doc, output);
+    socketIO.sendEVENT(output);
+    Serial.println("[IOc] Sent esp32_register event: " + macAddress);
+    needInitialTelemetry = true;
+  }
+
+  // Send initial telemetry safely from main loop once connected
+  if (needInitialTelemetry && isSocketConnected) {
+    needInitialTelemetry = false;
+    sendTelemetry();
+  }
 
   // Failover Check Mechanism: Auto switch between mainHost and backupHost if disconnected repeatedly for > 35s
   if (!isSocketConnected && (millis() - lastSocketDisconnectTime > socketFailoverTimeout) && connectionFailures >= 3) {
