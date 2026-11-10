@@ -532,6 +532,8 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload,
     // Quickly ignore broad dashboard broadcasts to keep ESP32 responsive and prevent buffer overflows
     if (strstr((char*)payload, "active_devices_update") != NULL ||
         strstr((char*)payload, "telemetry_update") != NULL ||
+        strstr((char*)payload, "dashboard_cmd_result") != NULL ||
+        strstr((char*)payload, "dashboard_update") != NULL ||
         strstr((char*)payload, "sms_update") != NULL) {
       break;
     }
