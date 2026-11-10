@@ -278,24 +278,36 @@ const char index_html[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
-// --- HELPER FUNCTION: Execute USSD with Carrier Fallback & Complete Response Extraction ---
+// --- HELPER FUNCTION: Execute USSD with Session Reply Support & Complete Response Extraction ---
 String executeUSSD(String code) {
   isSimBusy = true;
 
   // 1. Flush any residual serial data
   while (sim800l.available()) sim800l.read();
 
-  // 2. Clear any lingering USSD session to prevent +CME ERROR: 512
-  sim800l.println("AT+CUSD=2");
-  delay(100);
-  while (sim800l.available()) sim800l.read();
+  // If user requested to terminate / cancel current interactive USSD session
+  if (code.equalsIgnoreCase("CANCEL") || code.equalsIgnoreCase("END") || code == "#0") {
+    sim800l.println("AT+CUSD=2");
+    delay(100);
+    while (sim800l.available()) sim800l.read();
+    isSimBusy = false;
+    return "+CUSD: 2, \"USSD Session Terminated / Cancelled\"";
+  }
+
+  // 2. Only terminate previous session if initiating a NEW root USSD query (starts with '*')
+  // If code is numeric (e.g. "1", "2", "3") it is an in-session reply, so we keep the session alive!
+  if (code.startsWith("*")) {
+    sim800l.println("AT+CUSD=2");
+    delay(100);
+    while (sim800l.available()) sim800l.read();
+  }
 
   // 3. Set character set to standard GSM
   sim800l.println("AT+CSCS=\"GSM\"");
   delay(50);
   while (sim800l.available()) sim800l.read();
 
-  // 4. Send USSD command (Standard GSM USSD format first)
+  // 4. Send USSD command or in-session menu reply
   Serial.print("[USSD] Transmitting: "); Serial.println(code);
   sim800l.print("AT+CUSD=1,\"");
   sim800l.print(code);
@@ -318,9 +330,11 @@ String executeUSSD(String code) {
       Serial.println("\n[USSD] Standard format rejected, retrying with DCS=15 parameter...");
       retriedDcs = true;
       buffer = "";
-      sim800l.println("AT+CUSD=2");
-      delay(80);
-      while (sim800l.available()) sim800l.read();
+      if (code.startsWith("*")) {
+        sim800l.println("AT+CUSD=2");
+        delay(80);
+        while (sim800l.available()) sim800l.read();
+      }
       sim800l.print("AT+CUSD=1,\"");
       sim800l.print(code);
       sim800l.println("\",15");
@@ -369,6 +383,10 @@ String executeUSSD(String code) {
     if (endIdx != -1) cusdLine = cusdLine.substring(0, endIdx);
     cusdLine.trim();
     return cusdLine;
+  }
+
+  if (buffer.indexOf("+CME ERROR: 512") != -1 || buffer.indexOf("+CME ERROR: 500") != -1) {
+    return "[USSD Notice] Session expired or closed by network. Dial *121# to start a new session.";
   }
 
   if (buffer.indexOf("+CME ERROR") != -1) {

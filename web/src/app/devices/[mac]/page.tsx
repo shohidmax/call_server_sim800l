@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, use } from 'react';
+import React, { useState, use, useMemo } from 'react';
 import Link from 'next/link';
 import { useData } from '@/context/DataContext';
 import { useAuth } from '@/context/AuthContext';
@@ -113,8 +113,38 @@ export default function DeviceControlPage({ params }: { params: Promise<{ mac: s
 
   // USSD state
   const [ussdCode, setUssdCode] = useState('*121#');
+  const [ussdReplyCode, setUssdReplyCode] = useState('');
   const [ussdResult, setUssdResult] = useState('');
   const [ussdLoading, setUssdLoading] = useState(false);
+
+  // Determine if active interactive USSD session exists (carrier waiting for user input)
+  const isUssdSessionActive = useMemo(() => {
+    if (!ussdResult) return false;
+    // Check if +CUSD: 1 is present (action required from user)
+    if (ussdResult.includes('+CUSD: 1')) return true;
+    if (ussdResult.includes('+CUSD: 0') || ussdResult.includes('+CUSD: 2')) return false;
+    // If it has numbered options and mentions SIM800L Live Response
+    return ussdResult.includes('[SIM800L Live Response]') && 
+      (/\b1[\s\.\-]/.test(ussdResult) || /\b2[\s\.\-]/.test(ussdResult));
+  }, [ussdResult]);
+
+  // Automatically parse numbered options from carrier USSD menu (e.g. 1 Balance, 2 GP STAR)
+  const parsedMenuOptions = useMemo(() => {
+    if (!isUssdSessionActive || !ussdResult) return [];
+    const lines = ussdResult.split('\n');
+    const options: { num: string; label: string }[] = [];
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      const match = line.match(/^([0-9]{1,2})[\s\.\-\:](.+)$/);
+      if (match) {
+        options.push({ 
+          num: match[1], 
+          label: match[2].trim().replace(/^"/, '').replace(/["\],]+$/, '') 
+        });
+      }
+    }
+    return options;
+  }, [ussdResult, isUssdSessionActive]);
 
   // SMS state
   const [smsTarget, setSmsTarget] = useState('');
@@ -158,6 +188,23 @@ export default function DeviceControlPage({ params }: { params: Promise<{ mac: s
       setUssdResult(`[SIM800L Live Response]\n${resp}`);
     } catch (err: any) {
       setUssdResult(`[USSD Error]\n${err?.message || 'USSD inquiry failed or carrier timed out.'}`);
+    } finally {
+      setUssdLoading(false);
+    }
+  };
+
+  // Dedicated interactive USSD session reply handler
+  const handleQuickReply = async (replyCode: string) => {
+    if (!replyCode || ussdLoading) return;
+    setUssdLoading(true);
+    const isCancel = replyCode.toUpperCase() === 'CANCEL';
+    setUssdResult(prev => `${prev}\n\n>>> ${isCancel ? 'Cancelling Session' : `Replying [Option ${replyCode}]`}...\nAwaiting carrier response...`);
+    try {
+      const resp = await triggerUssd(device.mac, replyCode);
+      setUssdResult(`[SIM800L Live Response]\n${resp}`);
+      setUssdReplyCode('');
+    } catch (err: any) {
+      setUssdResult(prev => `${prev}\n\n[USSD Reply Error]\n${err?.message || 'Reply dispatch failed.'}`);
     } finally {
       setUssdLoading(false);
     }
@@ -674,6 +721,69 @@ export default function DeviceControlPage({ params }: { params: Promise<{ mac: s
                   )}
                 </div>
               </form>
+
+              {/* Interactive USSD Session Reply Box */}
+              {isUssdSessionActive && (
+                <div className="mt-3 p-3 bg-slate-950/80 border border-emerald-500/40 rounded-xl space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-400">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                      <span>Active USSD Menu Session (Carrier Waiting for Reply)</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleQuickReply('CANCEL')}
+                      disabled={ussdLoading}
+                      className="btn btn-xs btn-outline btn-error text-[10px] h-6 min-h-0"
+                      title="Abort USSD session (AT+CUSD=2)"
+                    >
+                      Cancel Session ✕
+                    </button>
+                  </div>
+
+                  {/* One-click Parsed Option Buttons */}
+                  {parsedMenuOptions.length > 0 && (
+                    <div>
+                      <div className="text-[10px] text-base-content/60 font-semibold mb-1">Click any option to reply:</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {parsedMenuOptions.map(opt => (
+                          <button
+                            key={opt.num}
+                            type="button"
+                            onClick={() => handleQuickReply(opt.num)}
+                            disabled={ussdLoading}
+                            className="btn btn-xs btn-outline btn-success hover:btn-success text-emerald-300 font-mono text-[11px] h-7 min-h-0 gap-1.5"
+                          >
+                            <span className="badge badge-xs badge-success text-slate-950 font-bold">{opt.num}</span>
+                            <span className="truncate max-w-[130px]">{opt.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Manual Reply Input Field */}
+                  <form 
+                    onSubmit={e => { e.preventDefault(); handleQuickReply(ussdReplyCode); }}
+                    className="flex gap-2 pt-1"
+                  >
+                    <input 
+                      type="text"
+                      value={ussdReplyCode}
+                      onChange={e => setUssdReplyCode(e.target.value)}
+                      placeholder="Type reply number (e.g. 1, 2) or sub-code..."
+                      className="input input-bordered input-sm flex-1 font-mono text-xs bg-slate-900 text-emerald-300 border-slate-700 font-bold"
+                    />
+                    <button
+                      type="submit"
+                      disabled={ussdLoading || !ussdReplyCode.trim()}
+                      className="btn btn-sm btn-success text-white font-bold text-xs"
+                    >
+                      {ussdLoading ? 'Sending...' : 'Reply ↩'}
+                    </button>
+                  </form>
+                </div>
+              )}
 
               <div className="flex flex-wrap gap-1.5 mt-3">
                 <button onClick={() => setUssdCode('*121#')} className="badge badge-outline badge-xs cursor-pointer hover:badge-primary font-mono">*121# (Menu/No)</button>
