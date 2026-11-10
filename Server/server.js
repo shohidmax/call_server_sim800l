@@ -90,6 +90,14 @@ io.on('connection', (socket) => {
             console.log(`📡 Relayed ${eventName} to ESP32 MAC ${mac}`);
         } else {
             console.log(`⚠️ Failed to relay ${eventName}. ESP32 MAC ${mac} offline.`);
+            if (eventName === 'esptarget_cmd_ussd') {
+                socket.emit('dashboard_cmd_result', {
+                    mac,
+                    type: 'ussd',
+                    code: payload?.code,
+                    data: `[Error: Device Offline] Device (${mac}) is not connected to this backend server instance. Please switch your dashboard server to the cloud server (sim800l.maxapi.esp32.site) where this ESP32 is connected.`
+                });
+            }
         }
     };
 

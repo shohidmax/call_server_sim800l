@@ -26,6 +26,7 @@ interface DataContextType {
   campaigns: Campaign[];
   serverConnected: boolean;
   activeServerUrl: string;
+  switchServer: (url: string) => void;
 
   // Actions
   addDevice: (device: Partial<Device>) => void;
@@ -752,12 +753,19 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
 
   const [activeServerUrl, setActiveServerUrl] = useState<string>(() => {
     if (typeof window !== 'undefined') {
-      if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-        return LOCAL_HOST;
-      }
+      const saved = localStorage.getItem('sim800l_active_server');
+      if (saved) return saved;
     }
-    return MAIN_HOST;
+    // Default to BACKUP_HOST (sim800l.maxapi.esp32.site) where ESP32 cluster is actively registered
+    return BACKUP_HOST;
   });
+
+  const switchServer = (newUrl: string) => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('sim800l_active_server', newUrl);
+    }
+    setActiveServerUrl(newUrl);
+  };
 
   const [bulkSmsConfig, setBulkSmsConfig] = useState<BulkSmsBdConfig>({
     apiKey: 'MS6MfGTEVrHaCJUQ5vAU',
@@ -974,7 +982,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     return () => {
       if (socket) (socket as Socket).disconnect();
     };
-  }, []);
+  }, [activeServerUrl]);
 
   // Periodic device online/offline watchdog (detects dead or dropped ESP32 gateways)
   useEffect(() => {
@@ -1908,6 +1916,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         campaigns,
         serverConnected,
         activeServerUrl,
+        switchServer,
         addDevice,
         updateDevice,
         deleteDevice,

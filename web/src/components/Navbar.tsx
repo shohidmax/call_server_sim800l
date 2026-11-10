@@ -20,7 +20,7 @@ import {
 
 export default function Navbar({ onOpenQuickDial }: { onOpenQuickDial?: () => void }) {
   const { currentUser, switchRole, logout, isAuthenticated } = useAuth();
-  const { serverConnected, devices, complaints, activeServerUrl } = useData();
+  const { serverConnected, devices, complaints, activeServerUrl, switchServer } = useData();
 
   const openTickets = complaints.filter(c => c.status === 'open').length;
 
@@ -36,25 +36,58 @@ export default function Navbar({ onOpenQuickDial }: { onOpenQuickDial?: () => vo
           <Menu className="w-5 h-5 text-base-content" />
         </label>
 
-        {/* Server Status Pill */}
+        {/* Server Status Dropdown & Node Indicator */}
         <div className="flex items-center gap-2">
-          {serverConnected ? (
-            <div 
-              className="badge badge-success badge-sm gap-1 py-2 px-2.5 text-[11px] font-semibold shadow-xs cursor-default"
-              title={`Active Host: ${activeServerUrl} (Main: 800lcall.espserver.site | Backup: sim800l.maxapi.esp32.site)`}
-            >
-              <span className="w-2 h-2 rounded-full bg-success-content animate-pulse"></span>
-              <span>{activeServerUrl.includes('maxapi') ? 'Backup Server' : (activeServerUrl.includes('800lcall') ? 'Main Server' : 'Local Backend')}</span>
-            </div>
-          ) : (
-            <div 
-              className="badge badge-warning badge-sm gap-1 py-2 px-2.5 text-[11px] font-semibold shadow-xs cursor-default"
-              title="Connecting to Main (800lcall.espserver.site) / Backup (sim800l.maxapi.esp32.site)"
-            >
-              <span className="w-2 h-2 rounded-full bg-warning-content"></span>
-              Failover Active
-            </div>
-          )}
+          <div className="dropdown">
+            <label tabIndex={0} className="cursor-pointer">
+              {serverConnected ? (
+                <div 
+                  className="badge badge-success badge-sm gap-1.5 py-2 px-2.5 text-[11px] font-semibold shadow-xs hover:opacity-90 transition-opacity"
+                  title="Click to view or switch cluster server"
+                >
+                  <span className="w-2 h-2 rounded-full bg-success-content animate-pulse"></span>
+                  <span className="font-mono">
+                    {activeServerUrl.includes('maxapi') ? 'sim800l.maxapi (Cloud)' : (activeServerUrl.includes('800lcall') ? '800lcall (Main)' : 'Localhost:3000')}
+                  </span>
+                </div>
+              ) : (
+                <div 
+                  className="badge badge-warning badge-sm gap-1.5 py-2 px-2.5 text-[11px] font-semibold shadow-xs hover:opacity-90 transition-opacity"
+                  title="Click to view or switch cluster server"
+                >
+                  <span className="w-2 h-2 rounded-full bg-warning-content"></span>
+                  <span>Connecting...</span>
+                </div>
+              )}
+            </label>
+            <ul tabIndex={0} className="dropdown-content menu p-2 shadow-xl bg-base-100 rounded-box w-64 border border-base-200 z-50 text-xs mt-2">
+              <li className="menu-title text-[10px] tracking-wider uppercase font-bold text-base-content/50">Cluster Server Routing</li>
+              <li>
+                <button 
+                  onClick={() => switchServer('https://sim800l.maxapi.esp32.site')} 
+                  className={activeServerUrl.includes('maxapi') ? 'active font-bold text-emerald-600' : ''}
+                >
+                  🌐 Cloud Backup (sim800l.maxapi.esp32.site)
+                </button>
+              </li>
+              <li>
+                <button 
+                  onClick={() => switchServer('https://800lcall.espserver.site')} 
+                  className={activeServerUrl.includes('800lcall') ? 'active font-bold text-primary' : ''}
+                >
+                  🌐 Cloud Main (800lcall.espserver.site)
+                </button>
+              </li>
+              <li>
+                <button 
+                  onClick={() => switchServer('http://localhost:3000')} 
+                  className={activeServerUrl.includes('localhost') ? 'active font-bold text-purple-600' : ''}
+                >
+                  💻 Localhost (http://localhost:3000)
+                </button>
+              </li>
+            </ul>
+          </div>
 
           <div className="hidden md:flex items-center text-xs text-base-content/60 font-mono gap-1">
             <span>Cluster:</span>

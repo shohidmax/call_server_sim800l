@@ -292,11 +292,11 @@ String executeUSSD(String code) {
   delay(100);
   while (sim800l.available()) sim800l.read();
 
-  // 4. Send USSD command with DCS=15 first
+  // 4. Send USSD command (Standard GSM USSD format first)
   Serial.print("[USSD] Transmitting: "); Serial.println(code);
   sim800l.print("AT+CUSD=1,\"");
   sim800l.print(code);
-  sim800l.println("\",15");
+  sim800l.println("\"");
 
   // Check initial modem acceptance (up to 800ms)
   unsigned long t0 = millis();
@@ -310,15 +310,15 @@ String executeUSSD(String code) {
     delay(10);
   }
 
-  // If DCS=15 rejected by operator/modem, retry without DCS parameter
+  // If standard format rejected, retry with DCS=15 parameter
   if (initResp.indexOf("ERROR") != -1 && initResp.indexOf("+CUSD:") == -1) {
-    Serial.println("[USSD] DCS=15 rejected, retrying without DCS parameter...");
+    Serial.println("[USSD] Standard format rejected, retrying with DCS=15 parameter...");
     sim800l.println("AT+CUSD=2");
     delay(100);
     while (sim800l.available()) sim800l.read();
     sim800l.print("AT+CUSD=1,\"");
     sim800l.print(code);
-    sim800l.println("\"");
+    sim800l.println("\",15");
   }
 
   // 5. Wait for unsolicited +CUSD network reply (up to 20 seconds)
