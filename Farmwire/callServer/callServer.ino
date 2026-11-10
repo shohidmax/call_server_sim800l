@@ -28,12 +28,15 @@ WebServer server(80);
 bool isSimBusy = false; // Prevents command collisions
 
 // --- BACKEND SERVER SETTINGS ---
-String mainHost = "800lcall.espserver.site";
-String backupHost = "sim800l.maxapi.esp32.site";
+// Primary cloud cluster host: sim800l.maxapi.esp32.site (active, healthy)
+// Secondary backup host: 800lcall.espserver.site
+String mainHost = "sim800l.maxapi.esp32.site";
+String backupHost = "800lcall.espserver.site";
 String currentHost = mainHost;
 bool isSocketConnected = false;
 unsigned long lastSocketDisconnectTime = 0;
-const unsigned long socketFailoverTimeout = 20000; // 20 seconds
+const unsigned long socketFailoverTimeout = 35000; // 35 seconds
+int connectionFailures = 0;
 String macAddress = "";
 
 unsigned long lastTelemetryTime = 0;
@@ -284,12 +287,12 @@ String executeUSSD(String code) {
 
   // 2. Clear any lingering USSD session to prevent +CME ERROR: 512
   sim800l.println("AT+CUSD=2");
-  delay(150);
+  delay(100);
   while (sim800l.available()) sim800l.read();
 
   // 3. Set character set to standard GSM
   sim800l.println("AT+CSCS=\"GSM\"");
-  delay(100);
+  delay(50);
   while (sim800l.available()) sim800l.read();
 
   // 4. Send USSD command (Standard GSM USSD format first)
@@ -298,38 +301,31 @@ String executeUSSD(String code) {
   sim800l.print(code);
   sim800l.println("\"");
 
-  // Check initial modem acceptance (up to 800ms)
-  unsigned long t0 = millis();
-  String initResp = "";
-  while (millis() - t0 < 800) {
-    while (sim800l.available()) {
-      char c = sim800l.read();
-      initResp += c;
-    }
-    if (initResp.indexOf("OK") != -1 || initResp.indexOf("ERROR") != -1) break;
-    delay(10);
-  }
-
-  // If standard format rejected, retry with DCS=15 parameter
-  if (initResp.indexOf("ERROR") != -1 && initResp.indexOf("+CUSD:") == -1) {
-    Serial.println("[USSD] Standard format rejected, retrying with DCS=15 parameter...");
-    sim800l.println("AT+CUSD=2");
-    delay(100);
-    while (sim800l.available()) sim800l.read();
-    sim800l.print("AT+CUSD=1,\"");
-    sim800l.print(code);
-    sim800l.println("\",15");
-  }
-
-  // 5. Wait for unsolicited +CUSD network reply (up to 20 seconds)
+  // 5. Wait for unsolicited +CUSD network reply (up to 20 seconds) without dropping any initial bytes
   String buffer = "";
   unsigned long startWait = millis();
+  bool retriedDcs = false;
 
   while (millis() - startWait < 20000) {
     while (sim800l.available()) {
       char c = sim800l.read();
       buffer += c;
       Serial.write(c); // Echo to serial monitor
+    }
+
+    // If standard format rejected with immediate ERROR and no +CUSD, retry with DCS=15 parameter
+    if (!retriedDcs && buffer.indexOf("ERROR") != -1 && buffer.indexOf("+CUSD:") == -1) {
+      Serial.println("\n[USSD] Standard format rejected, retrying with DCS=15 parameter...");
+      retriedDcs = true;
+      buffer = "";
+      sim800l.println("AT+CUSD=2");
+      delay(80);
+      while (sim800l.available()) sim800l.read();
+      sim800l.print("AT+CUSD=1,\"");
+      sim800l.print(code);
+      sim800l.println("\",15");
+      startWait = millis(); // Reset timer for retry
+      continue;
     }
 
     int cusdIdx = buffer.indexOf("+CUSD:");
@@ -474,18 +470,22 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload,
   case sIOtype_DISCONNECT:
     Serial.printf("[IOc] Disconnected from: %s\n", currentHost.c_str());
     isSocketConnected = false;
-    lastSocketDisconnectTime = millis(); // Mark failover countdown
+    connectionFailures++;
+    if (lastSocketDisconnectTime == 0) lastSocketDisconnectTime = millis();
     break;
 
   case sIOtype_ERROR:
     Serial.printf("[IOc] Socket/SSL Error on %s: %s\n", currentHost.c_str(), payload);
     isSocketConnected = false;
+    connectionFailures++;
     if (lastSocketDisconnectTime == 0) lastSocketDisconnectTime = millis();
     break;
 
   case sIOtype_CONNECT:
     Serial.printf("[IOc] Connected to url: %s\n", payload);
     isSocketConnected = true;
+    lastSocketDisconnectTime = 0;
+    connectionFailures = 0;
     // join default namespace (no auto join in Socket.IO v3)
     socketIO.send(sIOtype_CONNECT, "/");
 
@@ -496,12 +496,15 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload,
       array.add("esp32_register");
       JsonObject param1 = array.createNestedObject();
       param1["mac"] = macAddress;
+      param1["ip"] = WiFi.localIP().toString();
 
       String output;
       serializeJson(doc, output);
       socketIO.sendEVENT(output);
-      Serial.println("[IOc] Sent esp32_register event");
+      Serial.println("[IOc] Sent esp32_register event: " + macAddress);
     }
+    // Immediately emit initial telemetry to mark device online on server
+    sendTelemetry();
     break;
 
   case sIOtype_EVENT: {
@@ -894,56 +897,23 @@ void setup() {
   // Start the server
   server.begin();
 
-  // 4. Initialize Socket.IO connection with Cloud Main/Backup Failover
+  // 4. Initialize SIM800L basic settings
+  delay(1000);           // Give SIM module brief time to register
+  sim800l.println("AT"); // Wake up/Handshake
+  delay(100);
+  sim800l.println("AT+CMGF=1"); // Set to text mode
+  delay(100);
+  sim800l.println("AT+CNMI=2,2,0,0,0"); // Deliver SMS immediately directly on serial
+  delay(100);
+
+  // 5. Initialize Socket.IO connection with Cloud Main/Backup Failover
   Serial.println("[IOc] Initializing Cloud Socket.IO connection...");
-  Serial.print("[IOc] Primary Main Server: "); Serial.println(mainHost);
+  Serial.print("[IOc] Primary Cloud Server: "); Serial.println(mainHost);
   Serial.print("[IOc] Secondary Backup Server: "); Serial.println(backupHost);
   Serial.print("[IOc] Connecting to: "); Serial.println(currentHost);
   lastSocketDisconnectTime = millis();
   socketIO.beginSSL(currentHost.c_str(), 443, "/socket.io/?EIO=4");
   socketIO.onEvent(socketIOEvent);
-
-  // 4. Initialize SIM800L basic settings
-  delay(3000);           // Give SIM module time to register to network
-  sim800l.println("AT"); // Wake up/Handshake
-  delay(100);
-  sim800l.println("AT+CMGF=1"); // Set to text mode
-  delay(100);
-  sim800l.println(
-      "AT+CNMI=2,2,0,0,0"); // Deliver SMS immediately directly on serial
-
-  // 5. Fetch SIM Phone Number safely by polling the Local Operator MSISDN query
-  Serial.println("Identifying SIM Phone Number...");
-  sim800l.println("AT+CUSD=1,\"*2#\",15");
-  unsigned long msStart = millis();
-  String ussdRes = "";
-  while (millis() - msStart < 15000) {
-    while (sim800l.available()) {
-      char c = sim800l.read();
-      ussdRes += c;
-    }
-    if (ussdRes.indexOf("+CUSD:") != -1 && ussdRes.indexOf("MSISDN:") != -1) {
-      delay(300); // Wait for the whole string to finish
-      while (sim800l.available()) {
-        ussdRes += (char)sim800l.read();
-      }
-
-      int msisdnIndex = ussdRes.indexOf("MSISDN:");
-      if (msisdnIndex != -1) {
-        int newlineIdx = ussdRes.indexOf("\n", msisdnIndex);
-        if (newlineIdx != -1) {
-          int quoteIdx = ussdRes.indexOf("\"", newlineIdx);
-          if (quoteIdx != -1) {
-            simPhoneNumber = ussdRes.substring(newlineIdx + 1, quoteIdx);
-            simPhoneNumber.replace("\r", "");
-            simPhoneNumber.trim();
-            Serial.println("Phone Number Identified: " + simPhoneNumber);
-          }
-        }
-      }
-      break;
-    }
-  }
 }
 
 void loop() {
@@ -1042,14 +1012,15 @@ void loop() {
   // Handle ongoing Socket.IO connection
   socketIO.loop();
 
-  // Failover Check Mechanism: Auto switch between mainHost and backupHost if disconnected for > 20s
-  if (!isSocketConnected && (millis() - lastSocketDisconnectTime > socketFailoverTimeout)) {
-    Serial.printf("[IOc] Host %s unresponsive for %lu ms. Failover triggered! Switching server...\n", currentHost.c_str(), socketFailoverTimeout);
+  // Failover Check Mechanism: Auto switch between mainHost and backupHost if disconnected repeatedly for > 35s
+  if (!isSocketConnected && (millis() - lastSocketDisconnectTime > socketFailoverTimeout) && connectionFailures >= 3) {
+    Serial.printf("[IOc] Host %s failed %d times. Failover triggered! Switching server...\n", currentHost.c_str(), connectionFailures);
     socketIO.disconnect();
     currentHost = (currentHost == mainHost) ? backupHost : mainHost;
     Serial.printf("[IOc] Switching target host to: %s (SSL Port 443)\n", currentHost.c_str());
     socketIO.beginSSL(currentHost.c_str(), 443, "/socket.io/?EIO=4");
-    lastSocketDisconnectTime = millis(); // Reset countdown timer for the new host
+    lastSocketDisconnectTime = millis();
+    connectionFailures = 0;
   }
 
   // Handle LED based on WiFi status

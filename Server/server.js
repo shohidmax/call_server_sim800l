@@ -42,7 +42,13 @@ function initCloudClusterBridge() {
                 devices.forEach(d => {
                     // Only adopt if not connected directly to this local instance
                     if (!connectedESP32s.has(d.mac)) {
-                        activeDeviceTelemetry.set(d.mac, { ...d, isCloudNode: true });
+                        const existing = activeDeviceTelemetry.get(d.mac) || {};
+                        activeDeviceTelemetry.set(d.mac, { 
+                            ...existing, 
+                            ...d, 
+                            isCloudNode: true,
+                            lastSeen: d.lastSeen || Date.now()
+                        });
                     }
                 });
                 broadcastActiveDevices();
@@ -52,7 +58,12 @@ function initCloudClusterBridge() {
         cloudBridgeSocket.on('telemetry_update', (data) => {
             if (data && data.mac && !connectedESP32s.has(data.mac)) {
                 const existing = activeDeviceTelemetry.get(data.mac) || {};
-                activeDeviceTelemetry.set(data.mac, { ...existing, ...data, isCloudNode: true });
+                activeDeviceTelemetry.set(data.mac, { 
+                    ...existing, 
+                    ...data, 
+                    isCloudNode: true,
+                    lastSeen: Date.now()
+                });
                 broadcastActiveDevices();
                 io.emit('telemetry_update', data);
             }
@@ -337,13 +348,26 @@ setInterval(() => {
     const now = Date.now();
     for (const [mac, dev] of activeDeviceTelemetry.entries()) {
         const isSocketAlive = connectedESP32s.has(mac);
-        // If device was online but socket dropped or no telemetry for > 35s
         if (dev.status === 'online') {
-            if (!isSocketAlive || (dev.lastSeen && (now - dev.lastSeen > 35000))) {
+            // Keep cloud nodes online as long as the cloud bridge is alive or recent telemetry received
+            if (dev.isCloudNode) {
+                if (cloudBridgeSocket && cloudBridgeSocket.connected) {
+                    if (!dev.lastSeen || (now - dev.lastSeen < 120000)) {
+                        continue;
+                    }
+                }
+            }
+            if (!isSocketAlive && !dev.isCloudNode) {
                 dev.status = 'offline';
                 dev.lastOffline = dev.lastSeen || now;
                 changed = true;
-                console.log(`⏱️ Watchdog: Device ${mac} unresponsive for >35s. Marked OFFLINE at ${new Date(dev.lastOffline).toISOString()}.`);
+                console.log(`⏱️ Watchdog: Local device ${mac} disconnected. Marked OFFLINE.`);
+                io.emit('telemetry_update', { mac, status: 'offline', lastOffline: dev.lastOffline });
+            } else if (dev.lastSeen && (now - dev.lastSeen > 90000)) {
+                dev.status = 'offline';
+                dev.lastOffline = dev.lastSeen;
+                changed = true;
+                console.log(`⏱️ Watchdog: Device ${mac} unresponsive for >90s. Marked OFFLINE at ${new Date(dev.lastOffline).toISOString()}.`);
                 io.emit('telemetry_update', { mac, status: 'offline', lastOffline: dev.lastOffline });
             }
         }

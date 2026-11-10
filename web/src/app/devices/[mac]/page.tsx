@@ -676,10 +676,10 @@ export default function DeviceControlPage({ params }: { params: Promise<{ mac: s
               </form>
 
               <div className="flex flex-wrap gap-1.5 mt-3">
-                <button onClick={() => setUssdCode('*121#')} className="badge badge-outline badge-xs cursor-pointer hover:badge-primary font-mono">*121#</button>
+                <button onClick={() => setUssdCode('*121#')} className="badge badge-outline badge-xs cursor-pointer hover:badge-primary font-mono">*121# (Menu/No)</button>
                 <button onClick={() => setUssdCode('*121*1#')} className="badge badge-outline badge-xs cursor-pointer hover:badge-primary font-mono">*121*1# (Bal)</button>
-                <button onClick={() => setUssdCode('*566#')} className="badge badge-outline badge-xs cursor-pointer hover:badge-primary font-mono">*566#</button>
-                <button onClick={() => setUssdCode('*2#')} className="badge badge-outline badge-xs cursor-pointer hover:badge-primary font-mono">*2# (Own No)</button>
+                <button onClick={() => setUssdCode('*566#')} className="badge badge-outline badge-xs cursor-pointer hover:badge-primary font-mono">*566# (Main Bal)</button>
+                <button onClick={() => setUssdCode('*2#')} className="badge badge-outline badge-xs cursor-pointer hover:badge-primary font-mono">*2#</button>
               </div>
             </div>
 
