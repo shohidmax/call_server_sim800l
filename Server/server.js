@@ -188,7 +188,33 @@ io.on('connection', (socket) => {
         }
     };
 
-    socket.on('dashboard_cmd_dial', (data) => relayToESP(data.mac, 'esptarget_cmd_dial', data, 'dashboard_cmd_dial'));
+    socket.on('dashboard_cmd_dial', async (data) => {
+        relayToESP(data.mac, 'esptarget_cmd_dial', data, 'dashboard_cmd_dial');
+        try {
+            const clientIp = socket.handshake?.address || '127.0.0.1';
+            const manualJob = new EspJob({
+                mac: data.mac || null,
+                virtualId: data.virtualId || null,
+                phone: data.phone,
+                targetName: data.targetName || null,
+                audio: data.audio || '0001',
+                status: 'calling',
+                source: data.source || 'dashboard',
+                sourceDetails: data.sourceDetails || 'Dashboard (Live Voice Dialer)',
+                userId: data.userId || 'usr_dashboard',
+                userName: data.userName || 'Dashboard Operator',
+                userEmail: data.userEmail || null,
+                userRole: data.userRole || 'admin',
+                clientIp: clientIp,
+                feedbackDetails: `Direct manual call dispatched from Dashboard via Node ${data.mac || 'Auto'}`,
+                createdAt: new Date()
+            });
+            const savedJob = await manualJob.save();
+            io.emit('dashboard_update', { type: 'new_jobs', jobs: [savedJob] });
+        } catch(err) {
+            console.error('Error logging dashboard manual call:', err);
+        }
+    });
     socket.on('dashboard_cmd_hangup', (data) => relayToESP(data.mac, 'esptarget_cmd_hangup', data, 'dashboard_cmd_hangup'));
     socket.on('dashboard_cmd_ussd', (data) => relayToESP(data.mac, 'esptarget_cmd_ussd', data, 'dashboard_cmd_ussd'));
     socket.on('dashboard_cmd_flightmode', (data) => relayToESP(data.mac, 'esptarget_cmd_flightmode', data, 'dashboard_cmd_flightmode'));
@@ -296,7 +322,12 @@ io.on('connection', (socket) => {
                 actualStatus = 'pending';
             }
 
-            const updateData = { status: actualStatus };
+            const updateData = { 
+                status: actualStatus,
+                completedAt: new Date()
+            };
+            if (data.durationSeconds !== undefined) updateData.durationSeconds = data.durationSeconds;
+            if (data.feedbackDetails) updateData.feedbackDetails = data.feedbackDetails;
             if (actualStatus === 'pending') {
                 updateData.mac = null; // Unbind MAC so any free ESP32 can pick it up
             }
@@ -486,13 +517,29 @@ const broadcastSchema = new mongoose.Schema({
 const Broadcast = mongoose.model('Broadcast', broadcastSchema);
 
 // --- ESP32 Call Job Schema ---
-// This schema creates a queue of individual phone calls for the ESP32 to make
+// This schema creates a queue of individual phone calls for the ESP32 to make with full origin and user tracking
 const espJobSchema = new mongoose.Schema({
     mac: { type: String, required: false }, // Optional, allowing floating jobs
+    virtualId: { type: String, required: false }, // Virtual line / aggregator ID
+    isAnonymous: { type: Boolean, default: false },
+    anonymousId: { type: String },
     phone: { type: String, required: true },
+    targetName: { type: String },
     audio: { type: String, required: false }, // Track number (e.g. "0001") for DFPlayer
-    status: { type: String, enum: ['pending', 'calling', 'success', 'fail', 'failed', 'hardware_error', 'busy', 'received', 'number_off', 'unreachable'], default: 'pending' },
-    createdAt: { type: Date, default: Date.now }
+    status: { type: String, enum: ['pending', 'queued', 'calling', 'success', 'received', 'busy', 'rejected', 'call_waiting', 'forwarded', 'number_off', 'unreachable', 'hardware_error', 'fail', 'failed'], default: 'pending' },
+    durationSeconds: { type: Number, default: 0 },
+    feedbackDetails: { type: String },
+    source: { type: String, enum: ['api', 'podcast', 'broadcast', 'dashboard', 'campaign', 'system'], default: 'dashboard' },
+    sourceDetails: { type: String }, // e.g. "API: /api/broadcast", "Podcast: Storm Alert Track 0001", "Dashboard: Live Voice Dialer"
+    userId: { type: String },
+    userName: { type: String },
+    userEmail: { type: String },
+    userRole: { type: String },
+    clientIp: { type: String },
+    queuePosition: { type: Number },
+    attempts: { type: Number, default: 0 },
+    createdAt: { type: Date, default: Date.now },
+    completedAt: { type: Date }
 });
 
 const EspJob = mongoose.model('EspJob', espJobSchema);
@@ -718,10 +765,10 @@ app.post('/api/sms/bulksmsbd/config', (req, res) => {
     });
 });
 
-// 4. POST Route: Save the Broadcast Request AND Queue Calls for ESP32
+// 4. POST Route: Save the Broadcast Request AND Queue Calls for ESP32 with full Origin & User tracking
 app.post('/api/broadcast', async (req, res) => {
     try {
-        const { user_id, phone, mac, phone_call_list, payload, response } = req.body;
+        const { user_id, phone, mac, phone_call_list, payload, response, source, sourceDetails, userName, userEmail, userRole, virtualId, isAnonymous, anonymousId, recipientNames } = req.body;
 
         // 1. Save the main broadcast JSON
         const newBroadcast = new Broadcast({
@@ -729,16 +776,46 @@ app.post('/api/broadcast', async (req, res) => {
         });
         const savedBroadcast = await newBroadcast.save();
 
-        // 2. Break down the phone list and queue individual jobs for the ESP32
+        // 2. Identify Origin & User Details
+        const clientIp = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '127.0.0.1';
+        const rawSource = (source || '').toLowerCase();
+        const isPodcast = rawSource === 'podcast' || rawSource === 'podcust' || payload?.isPodcast || Boolean(payload?.audio);
+        const resolvedSource = isPodcast ? 'podcast' : (rawSource === 'dashboard' ? 'dashboard' : (rawSource === 'campaign' ? 'campaign' : 'api'));
+        
+        const audioTrack = payload && payload.audio ? payload.audio : '0001';
+        const resolvedDetails = sourceDetails || (
+            resolvedSource === 'podcast'
+                ? `Podcast / Broadcast Prompt [Track ${audioTrack}]`
+                : (resolvedSource === 'dashboard'
+                    ? `Dashboard Broadcast Panel`
+                    : `REST API (${req.originalUrl || '/api/broadcast'}) via ${clientIp}`)
+        );
+
+        const assignedMac = mac && mac.trim() !== '' ? mac.trim() : null;
+
+        // 3. Break down the phone list and queue individual jobs with complete audit trail
         if (phone_call_list && phone_call_list.length > 0) {
-            const assignedMac = mac && mac.trim() !== '' ? mac.trim() : null;
-            const audioTrack = payload && payload.audio ? payload.audio : null;
-            const jobsToCreate = phone_call_list.map(num => ({
+            const jobsToCreate = phone_call_list.map((num, idx) => ({
                 mac: assignedMac,
+                virtualId: virtualId || null,
+                isAnonymous: Boolean(isAnonymous),
+                anonymousId: anonymousId || null,
                 phone: num,
+                targetName: recipientNames?.[num] || null,
                 audio: audioTrack,
-                status: 'pending'
+                status: 'pending',
+                queuePosition: idx,
+                source: resolvedSource,
+                sourceDetails: resolvedDetails,
+                userId: user_id || 'api_client',
+                userName: userName || (resolvedSource === 'api' ? 'External API Client' : 'Broadcast Operator'),
+                userEmail: userEmail || null,
+                userRole: userRole || (resolvedSource === 'api' ? 'api' : 'moderator'),
+                clientIp: clientIp,
+                feedbackDetails: `Queued via ${resolvedSource.toUpperCase()} [${resolvedDetails}]`,
+                createdAt: new Date()
             }));
+
             const insertedJobs = await EspJob.insertMany(jobsToCreate);
             
             // Send newly created jobs to all dashboards
@@ -748,11 +825,67 @@ app.post('/api/broadcast', async (req, res) => {
             if(typeof dispatchJobs === 'function') dispatchJobs();
         }
 
-        console.log(`📡 Broadcast saved & ${phone_call_list?.length} calls queued globally.`);
-        res.status(201).json({ success: true, message: 'Broadcast saved & calls queued', data: savedBroadcast });
+        console.log(`📡 Broadcast saved & ${phone_call_list?.length} calls queued globally (Source: ${resolvedSource}).`);
+        res.status(201).json({ 
+            success: true, 
+            message: 'Broadcast saved & calls queued with full audit trace', 
+            source: resolvedSource,
+            sourceDetails: resolvedDetails,
+            data: savedBroadcast 
+        });
     } catch (error) {
         console.error('Error saving broadcast report:', error);
         res.status(500).json({ error: 'Failed to save broadcast data' });
+    }
+});
+
+// 4b. POST Route: Dedicated Direct Call API for third-party / cURL integrations
+app.post('/api/call', async (req, res) => {
+    try {
+        const { phone, mac, audio, source, sourceDetails, userId, userName, userEmail, userRole, virtualId, isAnonymous, anonymousId, targetName } = req.body;
+
+        if (!phone) {
+            return res.status(400).json({ success: false, error: 'Recipient phone number is required' });
+        }
+
+        const clientIp = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '127.0.0.1';
+        const callSource = source || 'api';
+        const details = sourceDetails || `REST API (/api/call) from ${clientIp}`;
+
+        const newJob = new EspJob({
+            mac: mac || null,
+            virtualId: virtualId || null,
+            isAnonymous: Boolean(isAnonymous),
+            anonymousId: anonymousId || null,
+            phone,
+            targetName: targetName || null,
+            audio: audio || '0001',
+            status: 'pending',
+            source: callSource,
+            sourceDetails: details,
+            userId: userId || 'api_client',
+            userName: userName || 'External API Client',
+            userEmail: userEmail || null,
+            userRole: userRole || 'api',
+            clientIp,
+            feedbackDetails: `Initiated via ${callSource.toUpperCase()} [${details}]`,
+            createdAt: new Date()
+        });
+
+        const savedJob = await newJob.save();
+        io.emit('dashboard_update', { type: 'new_jobs', jobs: [savedJob] });
+
+        // Trigger dispatcher immediately
+        if (typeof dispatchJobs === 'function') dispatchJobs();
+
+        res.status(201).json({
+            success: true,
+            message: 'Call successfully queued with full origin & user tracking',
+            data: savedJob
+        });
+    } catch (error) {
+        console.error('Error in /api/call:', error);
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
@@ -794,10 +927,14 @@ app.post('/api/esp32/call-result', async (req, res) => {
             return res.status(400).json({ error: 'job_id and status are required' });
         }
 
+        const updateFields = { status: status, completedAt: new Date() };
+        if (req.body.durationSeconds !== undefined) updateFields.durationSeconds = req.body.durationSeconds;
+        if (req.body.feedbackDetails) updateFields.feedbackDetails = req.body.feedbackDetails;
+
         // Update the job with the final result
         const updatedJob = await EspJob.findByIdAndUpdate(
             job_id,
-            { status: status },
+            updateFields,
             { new: true }
         );
 

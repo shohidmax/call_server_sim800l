@@ -32,7 +32,10 @@ import {
   Share2,
   Edit3,
   Calendar,
-  Trash2
+  Trash2,
+  Globe,
+  LayoutDashboard,
+  Megaphone
 } from 'lucide-react';
 import ClickToCopy from '@/components/ClickToCopy';
 
@@ -913,8 +916,10 @@ export default function DeviceControlPage({ params }: { params: Promise<{ mac: s
           <table className="table table-sm">
             <thead>
               <tr className="border-b border-base-200 text-[11px] uppercase tracking-wider text-base-content/60">
+                <th>Origin & Trigger</th>
                 <th>Target Phone</th>
                 <th>Status</th>
+                <th>Initiated By</th>
                 <th>Audio Track</th>
                 <th>Timestamp</th>
                 <th className="text-right">Job ID</th>
@@ -923,18 +928,54 @@ export default function DeviceControlPage({ params }: { params: Promise<{ mac: s
             <tbody className="divide-y divide-base-200 text-xs">
               {devCallJobs.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="text-center py-8 text-base-content/40">
+                  <td colSpan={7} className="text-center py-8 text-base-content/40">
                     No calls routed through this device yet
                   </td>
                 </tr>
               ) : (
                 devCallJobs.map(job => (
                   <tr key={job._id}>
+                    <td>
+                      <div className="space-y-0.5">
+                        {job.source === 'api' ? (
+                          <span className="badge badge-info badge-xs gap-1 font-bold text-[9px]">
+                            <Globe className="w-2.5 h-2.5" /> API
+                          </span>
+                        ) : job.source === 'podcast' ? (
+                          <span className="badge badge-secondary badge-xs gap-1 font-bold text-[9px]">
+                            <Radio className="w-2.5 h-2.5" /> Podcast
+                          </span>
+                        ) : job.source === 'campaign' ? (
+                          <span className="badge badge-accent badge-xs gap-1 font-bold text-[9px]">
+                            <Megaphone className="w-2.5 h-2.5" /> Campaign
+                          </span>
+                        ) : (
+                          <span className="badge badge-primary badge-xs gap-1 font-bold text-[9px]">
+                            <LayoutDashboard className="w-2.5 h-2.5" /> Dashboard
+                          </span>
+                        )}
+                        {job.sourceDetails && (
+                          <span className="text-[9px] text-base-content/50 font-mono block max-w-[120px] truncate" title={job.sourceDetails}>
+                            {job.sourceDetails}
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td className="font-mono font-bold">{job.phone}</td>
                     <td>
                       <span className="badge badge-sm font-bold uppercase text-[10px]">
                         {job.status}
                       </span>
+                    </td>
+                    <td>
+                      <div>
+                        <span className="font-semibold text-base-content text-[11px] block">
+                          {job.isAnonymous ? (job.anonymousId || 'Anonymous') : (job.userName || 'Admin System')}
+                        </span>
+                        <span className="badge badge-ghost badge-xs text-[9px] uppercase">
+                          {job.userRole || 'moderator'}
+                        </span>
+                      </div>
                     </td>
                     <td>Track {job.audio || '0001'}</td>
                     <td className="font-mono text-base-content/60">{new Date(job.createdAt).toLocaleString()}</td>

@@ -43,7 +43,12 @@ interface DataContextType {
   createBridge: (bridge: Omit<DeviceBridge, 'id'>) => void;
   toggleBridge: (id: string) => void;
 
-  triggerCall: (mac: string, phone: string, audio?: string) => Promise<boolean>;
+  triggerCall: (
+    mac: string, 
+    phone: string, 
+    audio?: string, 
+    options?: { source?: import('@/types/call').CallSource; sourceDetails?: string; targetName?: string }
+  ) => Promise<boolean>;
   triggerHangup: (mac: string) => Promise<boolean>;
   triggerUssd: (mac: string, code: string) => Promise<string>;
   triggerSms: (mac: string, phone: string, message: string) => Promise<boolean>;
@@ -58,6 +63,8 @@ interface DataContextType {
     groupId?: string; 
     audio?: string;
     recipientNames?: Record<string, string>;
+    source?: import('@/types/call').CallSource;
+    sourceDetails?: string;
   }) => Promise<void>;
   // Call Job Actions
   updateCallJob: (id: string, updates: Partial<CallJob>) => void;
@@ -607,9 +614,13 @@ const INITIAL_CALL_JOBS: CallJob[] = [
     feedbackDetails: 'Call connected & answered. Audio prompt played in full.',
     createdAt: '2026-11-09T22:15:00Z',
     completedAt: '2026-11-09T22:17:24Z',
+    source: 'dashboard',
+    sourceDetails: 'Dashboard (Live Voice Dialer)',
     userId: 'usr_admin',
     userName: 'Sarwar Jahan',
+    userEmail: 'admin@sim800l.local',
     userRole: 'admin',
+    clientIp: '192.168.1.50',
     attempts: 1
   },
   {
@@ -626,9 +637,13 @@ const INITIAL_CALL_JOBS: CallJob[] = [
     feedbackDetails: 'Carrier UDUB (User Determined User Busy) / Recipient actively rejected call.',
     createdAt: '2026-11-09T22:20:00Z',
     completedAt: '2026-11-09T22:20:08Z',
+    source: 'podcast',
+    sourceDetails: 'Podcast Broadcast (Track 0002.mp3: Welcome Prompt)',
     userId: 'usr_mgr_02',
     userName: 'Faruk Operations',
+    userEmail: 'manager@sim800l.local',
     userRole: 'manager',
+    clientIp: '192.168.1.65',
     attempts: 1
   },
   {
@@ -644,9 +659,13 @@ const INITIAL_CALL_JOBS: CallJob[] = [
     feedbackDetails: 'Carrier reported Call Waiting tone (Subscriber on active call). Re-queued for auto-retry.',
     createdAt: '2026-11-09T22:25:00Z',
     completedAt: '2026-11-09T22:25:24Z',
-    userId: 'usr_mod_03',
-    userName: 'Amina Khatun',
-    userRole: 'moderator',
+    source: 'api',
+    sourceDetails: 'REST API (/api/call) [Token Auth: srv_crm_auto]',
+    userId: 'usr_api_service',
+    userName: 'Automated CRM Webhook',
+    userEmail: 'crm-bot@sim800l.local',
+    userRole: 'api',
+    clientIp: '103.189.159.124',
     attempts: 2
   },
   {
@@ -662,9 +681,13 @@ const INITIAL_CALL_JOBS: CallJob[] = [
     feedbackDetails: 'Call forwarded to carrier voicemail system.',
     createdAt: '2026-11-09T22:30:00Z',
     completedAt: '2026-11-09T22:30:38Z',
+    source: 'campaign',
+    sourceDetails: 'Campaign Broadcast (VIP Notification Campaign)',
     userId: 'usr_admin',
     userName: 'Sarwar Jahan',
+    userEmail: 'admin@sim800l.local',
     userRole: 'admin',
+    clientIp: '192.168.1.50',
     attempts: 1
   },
   {
@@ -679,9 +702,13 @@ const INITIAL_CALL_JOBS: CallJob[] = [
     durationSeconds: 0,
     feedbackDetails: 'Subscriber busy. Re-queued in dispatcher with exponential backoff.',
     createdAt: '2026-11-09T22:35:00Z',
-    userId: 'usr_admin',
-    userName: 'Sarwar Jahan',
-    userRole: 'admin',
+    source: 'podcast',
+    sourceDetails: 'Podcast Broadcast (Track 0001.mp3: Emergency Intrusion)',
+    userId: 'usr_mod_03',
+    userName: 'Amina Khatun',
+    userEmail: 'moderator@sim800l.local',
+    userRole: 'moderator',
+    clientIp: '192.168.1.72',
     attempts: 1
   },
   {
@@ -697,9 +724,13 @@ const INITIAL_CALL_JOBS: CallJob[] = [
     feedbackDetails: 'Server channels at capacity. Queued in priority buffer (Position #1).',
     queuePosition: 1,
     createdAt: '2026-11-09T22:38:00Z',
-    userId: 'usr_admin',
-    userName: 'Sarwar Jahan',
-    userRole: 'admin',
+    source: 'api',
+    sourceDetails: 'REST API (/api/broadcast) from 192.168.0.254',
+    userId: 'usr_api_service',
+    userName: 'REST API Integrator',
+    userEmail: 'api@sim800l.local',
+    userRole: 'api',
+    clientIp: '192.168.0.254',
     attempts: 0
   }
 ];
@@ -1164,22 +1195,46 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   };
 
   // Hardware Control Triggers
-  const triggerCall = async (mac: string, phone: string, audio?: string): Promise<boolean> => {
+  const triggerCall = async (
+    mac: string, 
+    phone: string, 
+    audio?: string,
+    options?: { source?: import('@/types/call').CallSource; sourceDetails?: string; targetName?: string }
+  ): Promise<boolean> => {
+    const jobSource: import('@/types/call').CallSource = options?.source || 'dashboard';
+    const jobSourceDetails = options?.sourceDetails || 'Dashboard (Live Voice Dialer)';
     if (socketInstance) {
-      socketInstance.emit('dashboard_cmd_dial', { mac, phone, audio });
+      socketInstance.emit('dashboard_cmd_dial', { 
+        mac, 
+        phone, 
+        audio,
+        source: jobSource,
+        sourceDetails: jobSourceDetails,
+        targetName: options?.targetName,
+        userId: currentUser?.id || 'usr_dashboard',
+        userName: currentUser?.name || 'Dashboard User',
+        userEmail: currentUser?.email,
+        userRole: currentUser?.role || 'admin'
+      });
     }
     const newJob: CallJob = {
       _id: 'call_' + Date.now(),
       mac,
       phone,
+      targetName: options?.targetName,
       audio: audio || '0001',
       status: 'calling',
+      source: jobSource,
+      sourceDetails: jobSourceDetails,
       createdAt: new Date().toISOString(),
       userId: currentUser?.id,
-      userName: currentUser?.name
+      userName: currentUser?.name || 'Dashboard User',
+      userEmail: currentUser?.email,
+      userRole: currentUser?.role || 'admin',
+      feedbackDetails: `Live manual call dispatched from ${jobSourceDetails}`
     };
     setCallJobs(prev => [newJob, ...prev]);
-    recordLog('DIAL_CALL', phone, `Initiated manual call to ${phone} via ${mac}`);
+    recordLog('DIAL_CALL', phone, `Initiated manual call to ${phone} via ${mac} from ${jobSourceDetails}`);
     recordDeviceEvent({
       deviceMac: mac,
       type: 'CALL_OUT',
@@ -1187,7 +1242,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       actorEmail: currentUser?.email,
       actorRole: currentUser?.role,
       actionTitle: `Outbound Call Initiated to ${phone}`,
-      description: `Dialed ${phone} with audio prompt track [${audio || '0001'}]. Session dispatched to SIM800L serial channel.`,
+      description: `Dialed ${phone} with audio prompt track [${audio || '0001'}]. Session dispatched from ${jobSourceDetails}.`,
       metadata: {
         phoneNumber: phone,
         audioTrack: audio || '0001',
@@ -1443,11 +1498,19 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       groupId?: string; 
       audio?: string;
       recipientNames?: Record<string, string>;
+      source?: import('@/types/call').CallSource;
+      sourceDetails?: string;
     }
   ) => {
     const isAnon = options.isAnonymous || false;
     const anonId = isAnon ? (options.anonymousId || `ANON-CLOAK-${Math.floor(1000 + Math.random() * 9000)}`) : undefined;
     const targetRoute = options.virtualId ? `[Virtual Address: ${options.virtualId}]` : (options.mac ? `[MAC: ${options.mac}]` : '[Auto Cluster]');
+    const callSource: import('@/types/call').CallSource = options.source || (options.audio ? 'podcast' : 'dashboard');
+    const callSourceDetails = options.sourceDetails || (
+      callSource === 'podcast'
+        ? `Podcast Voice Broadcast [Track ${options.audio || '0001'}]`
+        : `Dashboard Broadcast Panel (${phoneList.length} numbers)`
+    );
 
     // High-load queue behavior: jobs are placed into priority FIFO queue with queuePosition
     const newJobs: CallJob[] = phoneList.map((p, i) => {
@@ -1466,13 +1529,17 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         queuePosition: isQueued ? i : undefined,
         durationSeconds: 0,
         attempts: 0,
+        source: callSource,
+        sourceDetails: callSourceDetails,
         feedbackDetails: isQueued 
           ? `Server load buffer. Priority Queue Position #${i} awaiting line release.` 
           : `Allocated line via ${targetRoute}. Outbound dialing initiated with Track [${options.audio || '0001'}].`,
         createdAt: new Date().toISOString(),
         userId: currentUser?.id,
         userName: isAnon ? `Anonymous (${anonId})` : (currentUser?.name || 'Administrator'),
-        userRole: currentUser?.role || 'admin'
+        userEmail: currentUser?.email,
+        userRole: currentUser?.role || 'admin',
+        clientIp: '127.0.0.1'
       };
     });
 
@@ -1481,13 +1548,17 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     const payload = {
       user_id: currentUser?.id || 'admin',
       userName: isAnon ? `Anonymous (${anonId})` : (currentUser?.name || 'Administrator'),
+      userEmail: currentUser?.email,
       userRole: currentUser?.role || 'admin',
+      source: callSource,
+      sourceDetails: callSourceDetails,
       phone: 'Admin Panel',
       mac: options.mac || '',
       virtualId: options.virtualId || '',
       isAnonymous: isAnon,
       anonymousId: anonId,
       phone_call_list: phoneList,
+      recipientNames: options.recipientNames,
       payload: {
         address: options.virtualId || options.mac || 'Cluster Dispatch',
         message: 'Batch voice broadcast',

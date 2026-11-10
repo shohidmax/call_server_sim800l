@@ -45,7 +45,12 @@ export function exportCallsPdf(
     anonymousId?: string;
     durationSeconds?: number;
     audio?: string | null;
+    source?: string;
+    sourceDetails?: string;
     userName?: string;
+    userRole?: string;
+    userEmail?: string;
+    clientIp?: string;
     feedbackDetails?: string;
     createdAt?: string;
   }>
@@ -80,15 +85,31 @@ export function exportCallsPdf(
       else if (j.status === 'calling') badgeClass = 'badge-primary';
       else if (j.status === 'queued') badgeClass = 'badge-warning';
 
+      let originBadgeClass = 'badge-neutral';
+      if (j.source === 'api') originBadgeClass = 'badge-info';
+      else if (j.source === 'podcast') originBadgeClass = 'badge-primary';
+      else if (j.source === 'campaign') originBadgeClass = 'badge-warning';
+
+      const originText = (j.source || 'dashboard').toUpperCase();
+      const initiatorText = j.userName || 'System';
+
       return `
         <tr>
           <td class="text-muted font-mono">${idx + 1}</td>
+          <td>
+            <span class="badge ${originBadgeClass}">${originText}</span>
+            <div class="text-muted text-[10px] mt-0.5">${(j.sourceDetails || 'Direct').replace(/</g, '&lt;')}</div>
+          </td>
           <td>
             <div class="font-bold">${j.phone}</div>
             <div class="text-muted text-xs">${j.targetName || '—'}</div>
           </td>
           <td><span class="badge ${badgeClass}">${j.status.toUpperCase()}</span></td>
           <td class="font-mono text-xs">${routeText}</td>
+          <td>
+            <div class="font-bold text-xs">${initiatorText}</div>
+            <div class="text-muted text-[10px]">${j.userRole || 'moderator'}</div>
+          </td>
           <td class="font-bold">${durText}</td>
           <td class="font-mono text-xs">${j.audio ? 'Track ' + j.audio : '—'}</td>
           <td class="text-xs text-muted max-w-sm">${(j.feedbackDetails || 'Normal termination').replace(/</g, '&lt;')}</td>
@@ -244,9 +265,11 @@ export function exportCallsPdf(
         <thead>
           <tr>
             <th style="width: 30px;">#</th>
+            <th>Origin / Trigger</th>
             <th>Recipient Contact</th>
             <th>Carrier Status</th>
             <th>Route / Channel</th>
+            <th>Initiator</th>
             <th>Duration</th>
             <th>Prompt</th>
             <th>Feedback / Carrier Trace</th>

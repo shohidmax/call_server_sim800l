@@ -14,6 +14,8 @@ export type CallStatus =
   | 'fail' 
   | 'failed';
 
+export type CallSource = 'api' | 'podcast' | 'dashboard' | 'campaign' | 'system';
+
 export interface CallJob {
   _id: string;
   mac?: string; // Physical MAC address
@@ -30,9 +32,13 @@ export interface CallJob {
   attempts?: number; // Number of dispatch retry attempts
   createdAt: string;
   completedAt?: string;
+  source?: CallSource; // Origin of call: 'api' | 'podcast' | 'dashboard' | 'campaign' | 'system'
+  sourceDetails?: string; // Origin location / details (e.g. "REST API: /api/broadcast", "Podcast: Emergency Alert Prompt 0001", "Dashboard: Live Voice Dialer")
   userId?: string; // Who requested it (User ID or 'system')
   userName?: string; // Requester display name
+  userEmail?: string; // Requester email address
   userRole?: string; // Requester role (admin, manager, etc.)
+  clientIp?: string; // IP address / client origin of requester
 }
 
 export interface IncomingCall {
