@@ -747,7 +747,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   };
 
   // Host configuration: Main Cloud Server, Secondary Backup, and Local Development
-  const MAIN_HOST = process.env.NEXT_PUBLIC_MAIN_SERVER || 'https://800lcall.espserver.site';
+  const MAIN_HOST = process.env.NEXT_PUBLIC_MAIN_SERVER || 'https://sim800l.maxapi.esp32.site';
   const BACKUP_HOST = process.env.NEXT_PUBLIC_BACKUP_SERVER || 'https://sim800l.maxapi.esp32.site';
   const LOCAL_HOST = 'http://localhost:3000';
 
@@ -1245,6 +1245,10 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
 
       const resultHandler = (data: any) => {
         if (data && data.type === 'ussd' && (!data.mac || data.mac === mac)) {
+          // Strictly match code if present to avoid eating stale or asynchronous results
+          if (data.code && String(data.code).trim() !== String(code).trim()) {
+            return;
+          }
           clearTimeout(timeoutTimer);
           socketInstance.off('dashboard_cmd_result', resultHandler);
           const finalResult = data.decoded || data.data || `+CUSD: 0, "OK"`;

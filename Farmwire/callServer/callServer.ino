@@ -300,18 +300,24 @@ String executeUSSD(String code) {
     sim800l.println("AT+CUSD=2");
     delay(100);
     while (sim800l.available()) sim800l.read();
+    sim800l.println("AT+CSCS=\"GSM\"");
+    delay(50);
+    while (sim800l.available()) sim800l.read();
   }
 
-  // 3. Set character set to standard GSM
-  sim800l.println("AT+CSCS=\"GSM\"");
-  delay(50);
-  while (sim800l.available()) sim800l.read();
-
-  // 4. Send USSD command or in-session menu reply
+  // 3. Send USSD command or in-session menu reply
   Serial.print("[USSD] Transmitting: "); Serial.println(code);
-  sim800l.print("AT+CUSD=1,\"");
-  sim800l.print(code);
-  sim800l.println("\"");
+  if (!code.startsWith("*")) {
+    // Active session menu reply (Grameenphone expects DCS=15 for reply dialogue)
+    sim800l.print("AT+CUSD=1,\"");
+    sim800l.print(code);
+    sim800l.println("\",15");
+  } else {
+    // Standard root USSD query (e.g. *121#, *566#)
+    sim800l.print("AT+CUSD=1,\"");
+    sim800l.print(code);
+    sim800l.println("\"");
+  }
 
   // 5. Wait for unsolicited +CUSD network reply (up to 20 seconds) without dropping any initial bytes
   String buffer = "";
@@ -325,19 +331,23 @@ String executeUSSD(String code) {
       Serial.write(c); // Echo to serial monitor
     }
 
-    // If standard format rejected with immediate ERROR and no +CUSD, retry with DCS=15 parameter
+    // If rejected with immediate ERROR and no +CUSD, retry with alternate DCS parameter
     if (!retriedDcs && buffer.indexOf("ERROR") != -1 && buffer.indexOf("+CUSD:") == -1) {
-      Serial.println("\n[USSD] Standard format rejected, retrying with DCS=15 parameter...");
+      Serial.println("\n[USSD] Format rejected, retrying with alternate parameter...");
       retriedDcs = true;
       buffer = "";
       if (code.startsWith("*")) {
         sim800l.println("AT+CUSD=2");
         delay(80);
         while (sim800l.available()) sim800l.read();
+        sim800l.print("AT+CUSD=1,\"");
+        sim800l.print(code);
+        sim800l.println("\",15");
+      } else {
+        sim800l.print("AT+CUSD=1,\"");
+        sim800l.print(code);
+        sim800l.println("\"");
       }
-      sim800l.print("AT+CUSD=1,\"");
-      sim800l.print(code);
-      sim800l.println("\",15");
       startWait = millis(); // Reset timer for retry
       continue;
     }

@@ -135,7 +135,7 @@ export default function DeviceControlPage({ params }: { params: Promise<{ mac: s
     const options: { num: string; label: string }[] = [];
     for (const rawLine of lines) {
       const line = rawLine.trim();
-      const match = line.match(/^([0-9]{1,2})[\s\.\-\:](.+)$/);
+      const match = line.match(/^([0-9]{1,2})[\s\.\-\:]\s*(.+)$/);
       if (match) {
         options.push({ 
           num: match[1], 
@@ -742,7 +742,7 @@ export default function DeviceControlPage({ params }: { params: Promise<{ mac: s
                   </div>
 
                   {/* One-click Parsed Option Buttons */}
-                  {parsedMenuOptions.length > 0 && (
+                  {parsedMenuOptions.length > 0 ? (
                     <div>
                       <div className="text-[10px] text-base-content/60 font-semibold mb-1">Click any option to reply:</div>
                       <div className="flex flex-wrap gap-1.5">
@@ -756,6 +756,23 @@ export default function DeviceControlPage({ params }: { params: Promise<{ mac: s
                           >
                             <span className="badge badge-xs badge-success text-slate-950 font-bold">{opt.num}</span>
                             <span className="truncate max-w-[130px]">{opt.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="text-[10px] text-base-content/60 font-semibold mb-1">Select reply digit:</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {['1', '2', '3', '4', '0'].map(d => (
+                          <button
+                            key={d}
+                            type="button"
+                            onClick={() => handleQuickReply(d)}
+                            disabled={ussdLoading}
+                            className="btn btn-xs btn-outline btn-success font-mono font-bold text-xs"
+                          >
+                            Option {d}
                           </button>
                         ))}
                       </div>
