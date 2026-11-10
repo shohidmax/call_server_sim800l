@@ -12,6 +12,8 @@ PORT=3000
 MONGO_URI=mongodb+srv://sarwarjahanshohid_db_trans:OXAqtShYSdEIbBXG@transformer.7b8ec5a.mongodb.net/?appName=transformer
 JWT_SECRET=super_secret_jwt_key_sim800l_2026
 JWT_EXPIRES_IN=7d
+BULKSMSBD_API_KEY=MS6MfGTEVrHaCJUQ5vAU
+BULKSMSBD_SENDER_ID=8809617618888
 ```
 
 ### B. Extended Mongoose Schemas (`Server/server.js`)
@@ -64,6 +66,29 @@ JWT_EXPIRES_IN=7d
 - **FIFO Dispatch**: As channels complete calls, the worker dequeues the lowest `queuePosition`.
 - **Auto-Retry Backoff**: Calls returning `busy` or `call_waiting` are rescheduled up to 3 times before final marking.
 - **Virtual Device Talk Time Accumulation**: Whenever a call on a virtual address completes, `totalCallDurationSeconds` on that virtual device is incremented by the exact call duration.
+
+### D. BulkSMSBD.COM Cloud SMS Gateway Integration
+- **Credentials & Endpoints**:
+  - Provider: `BulkSMSBD.COM` (High-Throughput Bangladesh Bulk SMS).
+  - API Key: `MS6MfGTEVrHaCJUQ5vAU`.
+  - Default Sender ID: `8809617618888`.
+  - SMS Submission Endpoint: `http://bulksmsbd.net/api/smsapi`.
+  - Balance Query Endpoint: `http://bulksmsbd.net/api/getBalanceApi`.
+- **Backend API Routes (`Server/server.js`)**:
+  - `GET /api/sms/bulksmsbd/balance`: Returns real-time credit balance and error translations.
+  - `POST /api/sms/bulksmsbd/send`: Dispatches single or multi-number SMS blasts with `8801XXXXXXXXX` phone formatting. Automatically persists delivered/failed messages to MongoDB `SMS` collection and broadcasts to clients via Socket.IO `sms_update`.
+  - `GET & POST /api/sms/bulksmsbd/config`: Live credentials management.
+  - Socket.IO listener: `dashboard_send_bulksms`.
+- **Response Code Handlers**:
+  - `202`: SMS Submitted Successfully.
+  - `1001`: Invalid Number.
+  - `1002`: Sender ID not correct or disabled.
+  - `1003`: Required fields missing.
+  - `1007`: Insufficient credit balance.
+  - `1011`: User ID not found in API key.
+  - `1012`: Masking SMS must be sent in Bengali.
+  - `1031`: Account not verified.
+  - `1032`: IP not whitelisted.
 
 ---
 

@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Device, DeviceGroup, VirtualDevice, DeviceBridge, DeviceShare, DeviceActivityEvent } from '@/types/device';
 import { CallJob, IncomingCall, BlockedNumber, AudioTrack, CallFeedback } from '@/types/call';
-import { SMSMessage } from '@/types/sms';
+import { SMSMessage, BulkSmsBdConfig, BulkSmsSendResult } from '@/types/sms';
 import { User, UserBehaviorLog } from '@/types/user';
 import { Campaign, CampaignRecipient } from '@/types/campaign';
 import { useAuth } from './AuthContext';
@@ -72,6 +72,10 @@ interface DataContextType {
   deleteSms: (id: string) => void;
   deleteSmsThread: (phoneNumber: string) => void;
   clearAllSms: () => void;
+  bulkSmsConfig: BulkSmsBdConfig;
+  fetchBulkSmsBalance: (customKey?: string) => Promise<{ success: boolean; balance?: string; error?: string; meaning?: string; response_code?: number }>;
+  sendBulkSmsBd: (numbers: string[], message: string, senderId?: string, apiKey?: string) => Promise<BulkSmsSendResult>;
+  updateBulkSmsConfig: (apiKey: string, senderId: string) => Promise<boolean>;
 
   // Blocked Numbers
   addBlockedNumber: (number: Omit<BlockedNumber, 'id' | 'blockedAt'>) => void;
@@ -755,6 +759,13 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     return MAIN_HOST;
   });
 
+  const [bulkSmsConfig, setBulkSmsConfig] = useState<BulkSmsBdConfig>({
+    apiKey: 'MS6MfGTEVrHaCJUQ5vAU',
+    senderId: '8809617618888',
+    balance: null,
+    statusMessage: 'Ready'
+  });
+
   // Connect to backend Socket.IO & fetch initial DB jobs & SMS with High-Availability Failover
   useEffect(() => {
     let socket: Socket | null = null;
@@ -792,6 +803,32 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
             .then(json => {
               if (json && json.success && json.data) setSmsMessages(json.data);
               else if (Array.isArray(json)) setSmsMessages(json);
+            })
+            .catch(() => {});
+
+          // Fetch BulkSMSBD config and balance
+          fetch(`${host}/api/sms/bulksmsbd/config`)
+            .then(res => res.json())
+            .then(cfg => {
+              if (cfg && cfg.apiKey) {
+                setBulkSmsConfig(prev => ({
+                  ...prev,
+                  apiKey: cfg.apiKey,
+                  senderId: cfg.senderId || prev.senderId
+                }));
+                fetch(`${host}/api/sms/bulksmsbd/balance?api_key=${encodeURIComponent(cfg.apiKey)}`)
+                  .then(r => r.json())
+                  .then(bal => {
+                    setBulkSmsConfig(prev => ({
+                      ...prev,
+                      balance: bal.balance !== undefined ? String(bal.balance) : null,
+                      statusCode: bal.response_code,
+                      statusMessage: bal.meaning || bal.error_message || (bal.success ? 'Active' : 'Ready'),
+                      lastChecked: new Date().toLocaleTimeString()
+                    }));
+                  })
+                  .catch(() => {});
+              }
             })
             .catch(() => {});
         });
@@ -1257,6 +1294,94 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       severity: 'info'
     });
     return true;
+  };
+
+  const fetchBulkSmsBalance = async (customKey?: string) => {
+    try {
+      const targetKey = customKey || bulkSmsConfig.apiKey;
+      const res = await fetch(`${activeServerUrl}/api/sms/bulksmsbd/balance?api_key=${encodeURIComponent(targetKey)}`);
+      const data = await res.json();
+      setBulkSmsConfig(prev => ({
+        ...prev,
+        apiKey: targetKey,
+        balance: data.balance !== undefined ? String(data.balance) : null,
+        statusCode: data.response_code,
+        statusMessage: data.meaning || data.error_message || (data.success ? 'Active' : 'Account Error'),
+        lastChecked: new Date().toLocaleTimeString()
+      }));
+      return data;
+    } catch (err: any) {
+      console.error('Failed to fetch BulkSMSBD balance:', err);
+      setBulkSmsConfig(prev => ({
+        ...prev,
+        statusMessage: 'Connection failed',
+        lastChecked: new Date().toLocaleTimeString()
+      }));
+      return { success: false, error: err.message };
+    }
+  };
+
+  const sendBulkSmsBd = async (
+    numbers: string[], 
+    message: string, 
+    senderId?: string, 
+    apiKey?: string
+  ): Promise<BulkSmsSendResult> => {
+    try {
+      const res = await fetch(`${activeServerUrl}/api/sms/bulksmsbd/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          numbers,
+          message,
+          senderId: senderId || bulkSmsConfig.senderId,
+          apiKey: apiKey || bulkSmsConfig.apiKey
+        })
+      });
+      const data: BulkSmsSendResult = await res.json();
+      
+      recordLog(
+        'SEND_SMS', 
+        `${numbers.length} Recipients`, 
+        `Dispatched BulkSMSBD blast: ${data.success ? 'Success (' + (data.recipient_count || numbers.length) + ' sent)' : 'Failed: ' + (data.meaning || data.error_message)}`
+      );
+
+      // Re-fetch balance after dispatch
+      fetchBulkSmsBalance();
+
+      return data;
+    } catch (err: any) {
+      console.error('Failed to dispatch BulkSMSBD:', err);
+      return {
+        success: false,
+        error_message: err.message,
+        meaning: 'Network / Gateway Connection Error'
+      };
+    }
+  };
+
+  const updateBulkSmsConfig = async (apiKey: string, senderId: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`${activeServerUrl}/api/sms/bulksmsbd/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey, senderId })
+      });
+      const json = await res.json();
+      if (json.success) {
+        setBulkSmsConfig(prev => ({
+          ...prev,
+          apiKey,
+          senderId
+        }));
+        fetchBulkSmsBalance(apiKey);
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error('Failed updating BulkSMS config:', err);
+      return false;
+    }
   };
 
   const triggerReboot = async (mac: string): Promise<boolean> => {
@@ -1823,6 +1948,10 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         deleteSms,
         deleteSmsThread,
         clearAllSms,
+        bulkSmsConfig,
+        fetchBulkSmsBalance,
+        sendBulkSmsBd,
+        updateBulkSmsConfig,
         updateBlockedNumber,
         updateAudioTrack,
         deleteAudioTrack,

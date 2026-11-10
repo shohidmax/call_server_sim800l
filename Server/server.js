@@ -106,6 +106,8 @@ io.on('connection', (socket) => {
                 sender: data.phone, // Sent *to* this number, but stored under sender field for UI simplicity
                 message: data.message,
                 direction: 'out',
+                gateway: 'sim800l',
+                mac: data.mac,
                 timestamp: new Date().toLocaleString()
             });
             const savedSms = await newSms.save();
@@ -113,6 +115,17 @@ io.on('connection', (socket) => {
             io.emit('sms_update', { type: 'new_sms', sms: savedSms });
             relayToESP(data.mac, 'esptarget_cmd_sendsms', data);
         } catch(err) { console.error('Error saving outbound SMS:', err); }
+    });
+
+    // Outbound Bulk SMS via BulkSMSBD Cloud Gateway
+    socket.on('dashboard_send_bulksms', async (data) => {
+        try {
+            const result = await sendViaBulkSmsBd(data);
+            socket.emit('bulksms_result', result);
+        } catch (err) {
+            console.error('Error sending BulkSMSBD via socket:', err);
+            socket.emit('bulksms_result', { success: false, error_message: err.message });
+        }
     });
 
     // Helper function to detect and decode SIM800L UCS2 Hex strings (e.g. for Bengali SMS)
@@ -325,7 +338,11 @@ const smsSchema = new mongoose.Schema({
     sender: { type: String, required: true },
     message: { type: String, required: true },
     direction: { type: String, enum: ['in', 'out'], default: 'in' },
-    timestamp: { type: String }, // Time reported by SIM800L
+    gateway: { type: String, enum: ['sim800l', 'bulksmsbd'], default: 'sim800l' },
+    senderId: { type: String },
+    mac: { type: String },
+    status: { type: String, enum: ['delivered', 'failed', 'pending'], default: 'delivered' },
+    timestamp: { type: String }, // Time reported by SIM800L or server
     receivedAt: { type: Date, default: Date.now } // Time saved to database
 });
 
@@ -425,6 +442,170 @@ app.get('/api/sms', async (req, res) => {
         console.error('Error fetching SMS:', error);
         res.status(500).json({ error: 'Failed to fetch SMS' });
     }
+});
+
+// --- BulkSMSBD.COM Cloud Gateway Integration ---
+let runtimeBulkSmsConfig = {
+    apiKey: process.env.BULKSMSBD_API_KEY || 'MS6MfGTEVrHaCJUQ5vAU',
+    senderId: process.env.BULKSMSBD_SENDER_ID || '8809617618888'
+};
+
+const BULKSMSBD_ERRORS = {
+    202: 'SMS Submitted Successfully',
+    1001: 'Invalid Number',
+    1002: 'Sender ID not correct or sender id is disabled',
+    1003: 'Please Required all fields / Contact Your System Administrator',
+    1005: 'Internal Error',
+    1006: 'Balance Validity Not Available',
+    1007: 'Balance Insufficient',
+    1011: 'User id not found in this API key',
+    1012: 'Masking SMS must be sent in Bengali',
+    1013: 'Sender ID has not found Gateway by API key',
+    1014: 'Sender Type Name not found using this sender by API key',
+    1015: 'Sender ID has not found Any Valid Gateway by API key',
+    1016: 'Sender Type Name Active Price Info not found by this sender ID',
+    1017: 'Sender Type Name Price Info not found by this sender ID',
+    1018: 'The Owner of this username Account is disabled',
+    1019: 'The sender type name Price of this username Account is disabled',
+    1020: 'The parent of this account is not found',
+    1021: 'The parent active sender type name price of this account is not found',
+    1031: 'Your Account Not Verified, Please Contact Administrator',
+    1032: 'IP Not Whitelisted'
+};
+
+function formatBdNumber(raw) {
+    if (!raw) return '';
+    let cleaned = String(raw).replace(/[^\d+]/g, '').trim();
+    if (cleaned.startsWith('+')) cleaned = cleaned.substring(1);
+    if (cleaned.startsWith('880')) return cleaned;
+    if (cleaned.startsWith('0')) return '88' + cleaned;
+    if (cleaned.length === 10 && cleaned.startsWith('1')) return '880' + cleaned;
+    return cleaned;
+}
+
+async function getBulkSmsBdBalance(apiKey) {
+    const key = apiKey || runtimeBulkSmsConfig.apiKey;
+    const apiUrl = `http://bulksmsbd.net/api/getBalanceApi?api_key=${encodeURIComponent(key)}`;
+    const apiRes = await fetch(apiUrl, { method: 'GET' });
+    const json = await apiRes.json();
+    const meaning = BULKSMSBD_ERRORS[json.response_code] || json.error_message || '';
+    return {
+        success: json.response_code === 202,
+        ...json,
+        meaning
+    };
+}
+
+async function sendViaBulkSmsBd({ numbers, message, senderId, apiKey }) {
+    const key = apiKey || runtimeBulkSmsConfig.apiKey;
+    const sender = senderId || runtimeBulkSmsConfig.senderId;
+
+    let rawList = [];
+    if (Array.isArray(numbers)) {
+        rawList = numbers;
+    } else if (typeof numbers === 'string') {
+        rawList = numbers.split(/[\r\n,;]+/).map(s => s.trim()).filter(Boolean);
+    }
+
+    const formattedNumbers = rawList.map(formatBdNumber).filter(n => n.length >= 11);
+    if (formattedNumbers.length === 0) {
+        return { success: false, response_code: 1001, error_message: 'No valid mobile numbers provided', meaning: BULKSMSBD_ERRORS[1001] };
+    }
+    if (!message || !message.trim()) {
+        return { success: false, response_code: 1003, error_message: 'Message content cannot be empty', meaning: BULKSMSBD_ERRORS[1003] };
+    }
+
+    const numberParam = formattedNumbers.join(',');
+    const queryParams = new URLSearchParams({
+        api_key: key,
+        type: 'text',
+        number: numberParam,
+        senderid: sender,
+        message: message.trim()
+    });
+
+    const apiUrl = `http://bulksmsbd.net/api/smsapi?${queryParams.toString()}`;
+    const apiRes = await fetch(apiUrl, { method: 'POST' });
+    const json = await apiRes.json();
+
+    const isSuccess = json.response_code === 202;
+    const meaning = BULKSMSBD_ERRORS[json.response_code] || json.error_message || json.success_message || 'Unknown response';
+
+    // Save outbound SMS records to database and broadcast to real-time clients
+    for (const num of formattedNumbers) {
+        try {
+            const record = new SMS({
+                sender: num,
+                message: message.trim(),
+                direction: 'out',
+                gateway: 'bulksmsbd',
+                senderId: sender,
+                status: isSuccess ? 'delivered' : 'failed',
+                timestamp: new Date().toLocaleString()
+            });
+            const saved = await record.save();
+            io.emit('sms_update', { type: 'new_sms', sms: saved });
+        } catch (dbErr) {
+            console.error('Failed saving BulkSMS record:', dbErr);
+        }
+    }
+
+    return {
+        success: isSuccess,
+        response_code: json.response_code,
+        message_id: json.message_id,
+        error_message: json.error_message,
+        success_message: json.success_message,
+        meaning,
+        recipient_count: formattedNumbers.length,
+        recipients: formattedNumbers
+    };
+}
+
+// BulkSMSBD: Check Account Credit Balance
+app.get('/api/sms/bulksmsbd/balance', async (req, res) => {
+    try {
+        const apiKey = req.query.api_key;
+        const result = await getBulkSmsBdBalance(apiKey);
+        res.json(result);
+    } catch (err) {
+        console.error('BulkSMSBD balance check failed:', err);
+        res.status(500).json({ success: false, error_message: err.message });
+    }
+});
+
+// BulkSMSBD: Dispatch SMS Blast / Message
+app.post('/api/sms/bulksmsbd/send', async (req, res) => {
+    try {
+        const { numbers, message, senderId, apiKey } = req.body;
+        const result = await sendViaBulkSmsBd({ numbers, message, senderId, apiKey });
+        res.status(result.success ? 200 : 400).json(result);
+    } catch (err) {
+        console.error('BulkSMSBD send failed:', err);
+        res.status(500).json({ success: false, error_message: err.message });
+    }
+});
+
+// BulkSMSBD: Get / Update Runtime Configuration
+app.get('/api/sms/bulksmsbd/config', (req, res) => {
+    res.json({
+        apiKey: runtimeBulkSmsConfig.apiKey,
+        senderId: runtimeBulkSmsConfig.senderId
+    });
+});
+
+app.post('/api/sms/bulksmsbd/config', (req, res) => {
+    const { apiKey, senderId } = req.body;
+    if (apiKey) runtimeBulkSmsConfig.apiKey = apiKey.trim();
+    if (senderId) runtimeBulkSmsConfig.senderId = senderId.trim();
+    res.json({
+        success: true,
+        message: 'BulkSMSBD credentials updated',
+        config: {
+            apiKey: runtimeBulkSmsConfig.apiKey,
+            senderId: runtimeBulkSmsConfig.senderId
+        }
+    });
 });
 
 // 4. POST Route: Save the Broadcast Request AND Queue Calls for ESP32

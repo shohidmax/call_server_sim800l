@@ -30,6 +30,7 @@ import {
   Calendar,
   Cpu,
   Layers,
+  Globe,
   X
 } from 'lucide-react';
 import ClickToCopy from '@/components/ClickToCopy';
@@ -809,6 +810,30 @@ export default function CampaignsPage() {
                               </span>
                             </label>
                           ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Cloud Bulk SMS Gateway (BulkSMSBD) */}
+                    {campType !== 'voice' && (
+                      <div className="pt-2 border-t border-base-200/60">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 mb-1 flex items-center gap-1">
+                          <Globe className="w-3 h-3" /> Cloud Bulk SMS Gateways
+                        </div>
+                        <div className="space-y-1">
+                          <label className="flex items-center gap-2 text-xs p-1.5 hover:bg-emerald-500/10 rounded-lg cursor-pointer transition-colors">
+                            <input 
+                              type="checkbox" 
+                              checked={selectedDevices.includes('GATEWAY_BULKSMSBD')} 
+                              onChange={() => handleDeviceToggle('GATEWAY_BULKSMSBD')}
+                              className="checkbox checkbox-success checkbox-xs"
+                            />
+                            <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">BulkSMSBD.COM Cloud API</span>
+                            <span className="text-[10px] text-base-content/60 font-mono">(High Volume Bulk Blast)</span>
+                            <span className="badge badge-success text-white badge-xs ml-auto uppercase text-[9px] font-bold">
+                              Cloud
+                            </span>
+                          </label>
                         </div>
                       </div>
                     )}

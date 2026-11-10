@@ -136,6 +136,32 @@ JWT_EXPIRES_IN=7d
   - 100% English interface across all 20 pages.
   - Responsive layouts, modals, and tables across all smartphone and tablet viewports.
 
+- [x] **BulkSMSBD.COM Cloud SMS Gateway Integration**:
+  - **API Configuration & Credentials**:
+    - Provider: `BulkSMSBD.COM` (Bangladesh Bulk SMS Gateway).
+    - API Key: `MS6MfGTEVrHaCJUQ5vAU`.
+    - Default Sender ID: `8809617618888` (Configurable numeric or approved brand masking).
+    - SMS API Endpoint: `http://bulksmsbd.net/api/smsapi`.
+    - Balance API Endpoint: `http://bulksmsbd.net/api/getBalanceApi`.
+  - **Backend Server (`Server/server.js`)**:
+    - Added `GET /api/sms/bulksmsbd/balance`: Checks live credit balance with response code & error handling.
+    - Added `POST /api/sms/bulksmsbd/send`: Dispatches high-volume single or bulk SMS blasts. Normalizes Bangladeshi numbers into `8801XXXXXXXXX` standard, supports comma/newline separated recipient lists, saves records into MongoDB `SMS` collection, and emits `sms_update` in real-time.
+    - Added `GET & POST /api/sms/bulksmsbd/config`: Runtime credential updates without needing server reboots.
+    - Added Socket.IO listener `dashboard_send_bulksms`.
+    - Updated `smsSchema` to include `gateway` (`'sim800l' | 'bulksmsbd'`), `senderId`, and `status`.
+    - Full error dictionary mapped to BulkSMSBD codes (`202` Success, `1001` Invalid Number, `1002` Sender ID disabled, `1007` Balance Insufficient, `1011` User ID not found, `1012` Bengali Masking required, `1031` Account not verified, etc.).
+  - **Frontend UI & Data Context (`web/src/app/sms/page.tsx`, `web/src/context/DataContext.tsx`)**:
+    - Dual Gateway Composer: Toggle between **BulkSMSBD Cloud Gateway** and **SIM800L Hardware Modems**.
+    - Live Recipient Parsing: Automatic detection of valid Bangladesh mobile numbers from text or pasted CSV/Excel lists.
+    - 4th KPI Stat Card: Displays live BulkSMSBD account balance (`৳`), status badge, refresh balance button, and configuration drawer.
+    - Gateway Settings Modal: Edit API key, set default sender ID, and perform one-click "Test Balance" diagnostics.
+    - Message Feed Filter: Filter by `All Channels`, `BulkSMSBD Cloud`, or `SIM800L Modems`.
+    - Visual Channel Badges on SMS cards: `[🌐 BulkSMSBD Cloud | Sender: ...]` vs `[📟 SIM800L Modem | MAC]`.
+  - **Campaigns Engine (`web/src/app/campaigns/page.tsx`)**:
+    - Added `BulkSMSBD.COM Cloud API` to the gateway selector for SMS and Hybrid campaigns.
+  - **Standalone Dashboard (`Dashboard/index.html`)**:
+    - Added BulkSMSBD Cloud / SIM800L Modem selector with instant feedback banner and channel badges.
+
 ---
 
 ## 🔒 4. Backward Compatibility & System Health
