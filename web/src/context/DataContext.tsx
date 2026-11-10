@@ -754,7 +754,8 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const [activeServerUrl, setActiveServerUrl] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('sim800l_active_server');
-      if (saved) return saved;
+      // If user had previously stored localhost, auto-promote to live cloud cluster where ESP32 is registered
+      if (saved && saved !== LOCAL_HOST) return saved;
     }
     // Default to BACKUP_HOST (sim800l.maxapi.esp32.site) where ESP32 cluster is actively registered
     return BACKUP_HOST;

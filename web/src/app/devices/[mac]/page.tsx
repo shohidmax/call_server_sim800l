@@ -55,7 +55,9 @@ export default function DeviceControlPage({ params }: { params: Promise<{ mac: s
     triggerUssd, 
     triggerSms, 
     triggerReboot, 
-    triggerFlightMode 
+    triggerFlightMode,
+    activeServerUrl,
+    switchServer
   } = useData();
 
   const device = devices.find(d => d.mac.toUpperCase() === rawMac.toUpperCase()) || {
@@ -624,7 +626,12 @@ export default function DeviceControlPage({ params }: { params: Promise<{ mac: s
                 <h3 className="font-bold text-sm text-base-content flex items-center gap-2">
                   <Terminal className="w-4 h-4 text-primary" /> USSD Balance & Inquiries
                 </h3>
-                <span className="text-[10px] font-mono text-base-content/50">AT+CUSD</span>
+                <div className="flex items-center gap-1.5">
+                  <span className={`badge badge-xs font-mono font-bold ${activeServerUrl.includes('maxapi') ? 'badge-success text-white' : 'badge-ghost'}`}>
+                    {activeServerUrl.includes('maxapi') ? 'sim800l.maxapi' : (activeServerUrl.includes('800lcall') ? '800lcall' : 'Localhost')}
+                  </span>
+                  <span className="text-[10px] font-mono text-base-content/50">AT+CUSD</span>
+                </div>
               </div>
 
               <form onSubmit={handleSendUssd} className="space-y-3">
@@ -646,8 +653,25 @@ export default function DeviceControlPage({ params }: { params: Promise<{ mac: s
                 </div>
 
                 {/* Terminal Output */}
-                <div className="bg-slate-900 text-emerald-400 p-3 rounded-xl font-mono text-xs min-h-[90px] whitespace-pre-wrap break-words border border-slate-800 shadow-inner">
-                  {ussdResult || '// USSD responses from mobile network operator will print here...'}
+                <div className="bg-slate-900 text-emerald-400 p-3 rounded-xl font-mono text-xs min-h-[90px] whitespace-pre-wrap break-words border border-slate-800 shadow-inner flex flex-col justify-between">
+                  <div>
+                    {ussdResult || '// USSD responses from mobile network operator will print here...'}
+                  </div>
+                  {ussdResult && ussdResult.includes('Device Offline') && (
+                    <div className="mt-3 pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[10px] text-amber-400">Current Node: {activeServerUrl}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          switchServer('https://sim800l.maxapi.esp32.site');
+                          setUssdResult('[Switched Cluster] Dashboard reconnected to https://sim800l.maxapi.esp32.site. Click "Send USSD" to execute!');
+                        }}
+                        className="btn btn-xs btn-success text-white font-bold"
+                      >
+                        ⚡ Switch to sim800l.maxapi.esp32.site
+                      </button>
+                    </div>
+                  )}
                 </div>
               </form>
 

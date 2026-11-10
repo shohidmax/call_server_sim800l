@@ -7,9 +7,75 @@ const cors = require('cors');
 const app = express();
 const http = require('http');
 const { Server } = require('socket.io');
+const { io: ioClient } = require('socket.io-client');
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 const PORT = process.env.PORT || 3000;
+
+// --- CLOUD CLUSTER BRIDGE ---
+// Allows local server instances to seamlessly route commands to cloud-connected ESP32s
+const CLOUD_BRIDGE_URL = process.env.CLOUD_CLUSTER_URL || 'https://sim800l.maxapi.esp32.site';
+let cloudBridgeSocket = null;
+
+function initCloudClusterBridge() {
+    try {
+        console.log(`🌐 Initializing Cloud Cluster Bridge to: ${CLOUD_BRIDGE_URL}`);
+        cloudBridgeSocket = ioClient(CLOUD_BRIDGE_URL, {
+            transports: ['websocket', 'polling'],
+            timeout: 5000,
+            reconnection: true,
+            reconnectionAttempts: Infinity,
+            reconnectionDelay: 3000
+        });
+
+        cloudBridgeSocket.on('connect', () => {
+            console.log(`✅ Cloud Cluster Bridge CONNECTED to: ${CLOUD_BRIDGE_URL}`);
+        });
+
+        cloudBridgeSocket.on('disconnect', () => {
+            console.log(`⚠️ Cloud Cluster Bridge disconnected from ${CLOUD_BRIDGE_URL}`);
+        });
+
+        // Mirror active device telemetry from cloud
+        cloudBridgeSocket.on('active_devices_update', (devices) => {
+            if (Array.isArray(devices)) {
+                devices.forEach(d => {
+                    // Only adopt if not connected directly to this local instance
+                    if (!connectedESP32s.has(d.mac)) {
+                        activeDeviceTelemetry.set(d.mac, { ...d, isCloudNode: true });
+                    }
+                });
+                broadcastActiveDevices();
+            }
+        });
+
+        cloudBridgeSocket.on('telemetry_update', (data) => {
+            if (data && data.mac && !connectedESP32s.has(data.mac)) {
+                const existing = activeDeviceTelemetry.get(data.mac) || {};
+                activeDeviceTelemetry.set(data.mac, { ...existing, ...data, isCloudNode: true });
+                broadcastActiveDevices();
+                io.emit('telemetry_update', data);
+            }
+        });
+
+        // Mirror command results (USSD, reboot, dial, etc.) from cloud
+        cloudBridgeSocket.on('dashboard_cmd_result', (data) => {
+            console.log(`📡 [Cloud Bridge] Relaying cmd_result to local dashboard:`, data);
+            io.emit('dashboard_cmd_result', data);
+        });
+
+        cloudBridgeSocket.on('sms_update', (data) => {
+            io.emit('sms_update', data);
+        });
+
+        cloudBridgeSocket.on('connect_error', (err) => {
+            console.warn(`⚠️ Cloud Cluster Bridge connect warning:`, err.message);
+        });
+    } catch (e) {
+        console.warn(`⚠️ Could not init Cloud Cluster Bridge:`, e.message);
+    }
+}
+initCloudClusterBridge();
 
 // Socket.IO Logic
 const connectedESP32s = new Map();
@@ -83,29 +149,32 @@ io.on('connection', (socket) => {
     });
 
     // --- MANUAL CONTROL EVENTS (Dashboard -> ESP32) ---
-    const relayToESP = (mac, eventName, payload) => {
+    const relayToESP = (mac, eventName, payload, dashboardEvent) => {
         const espSocketId = connectedESP32s.get(mac);
         if (espSocketId) {
             io.to(espSocketId).emit(eventName, payload);
-            console.log(`📡 Relayed ${eventName} to ESP32 MAC ${mac}`);
+            console.log(`📡 Relayed ${eventName} locally to ESP32 MAC ${mac}`);
+        } else if (cloudBridgeSocket && cloudBridgeSocket.connected) {
+            console.log(`🌐 Device ${mac} not local; forwarding ${dashboardEvent || eventName} via Cloud Cluster Bridge to ${CLOUD_BRIDGE_URL}`);
+            cloudBridgeSocket.emit(dashboardEvent || eventName, payload);
         } else {
-            console.log(`⚠️ Failed to relay ${eventName}. ESP32 MAC ${mac} offline.`);
+            console.log(`⚠️ Failed to relay ${eventName}. ESP32 MAC ${mac} offline and Cloud Bridge disconnected.`);
             if (eventName === 'esptarget_cmd_ussd') {
                 socket.emit('dashboard_cmd_result', {
                     mac,
                     type: 'ussd',
                     code: payload?.code,
-                    data: `[Error: Device Offline] Device (${mac}) is not connected to this backend server instance. Please switch your dashboard server to the cloud server (sim800l.maxapi.esp32.site) where this ESP32 is connected.`
+                    data: `[Error: Device Offline] Device (${mac}) is offline on this server and Cloud Bridge is unreachable.`
                 });
             }
         }
     };
 
-    socket.on('dashboard_cmd_dial', (data) => relayToESP(data.mac, 'esptarget_cmd_dial', data));
-    socket.on('dashboard_cmd_hangup', (data) => relayToESP(data.mac, 'esptarget_cmd_hangup', data));
-    socket.on('dashboard_cmd_ussd', (data) => relayToESP(data.mac, 'esptarget_cmd_ussd', data));
-    socket.on('dashboard_cmd_flightmode', (data) => relayToESP(data.mac, 'esptarget_cmd_flightmode', data));
-    socket.on('dashboard_cmd_reboot', (data) => relayToESP(data.mac, 'esptarget_cmd_reboot', data));
+    socket.on('dashboard_cmd_dial', (data) => relayToESP(data.mac, 'esptarget_cmd_dial', data, 'dashboard_cmd_dial'));
+    socket.on('dashboard_cmd_hangup', (data) => relayToESP(data.mac, 'esptarget_cmd_hangup', data, 'dashboard_cmd_hangup'));
+    socket.on('dashboard_cmd_ussd', (data) => relayToESP(data.mac, 'esptarget_cmd_ussd', data, 'dashboard_cmd_ussd'));
+    socket.on('dashboard_cmd_flightmode', (data) => relayToESP(data.mac, 'esptarget_cmd_flightmode', data, 'dashboard_cmd_flightmode'));
+    socket.on('dashboard_cmd_reboot', (data) => relayToESP(data.mac, 'esptarget_cmd_reboot', data, 'dashboard_cmd_reboot'));
     
     // Outbound SMS from Dashboard -> DB -> ESP32
     socket.on('dashboard_send_sms', async (data) => {
@@ -121,7 +190,7 @@ io.on('connection', (socket) => {
             const savedSms = await newSms.save();
             
             io.emit('sms_update', { type: 'new_sms', sms: savedSms });
-            relayToESP(data.mac, 'esptarget_cmd_sendsms', data);
+            relayToESP(data.mac, 'esptarget_cmd_sendsms', data, 'dashboard_send_sms');
         } catch(err) { console.error('Error saving outbound SMS:', err); }
     });
 
