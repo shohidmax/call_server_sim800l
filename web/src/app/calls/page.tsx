@@ -158,7 +158,6 @@ export default function CallsPage() {
       return true;
     });
   }, [callJobs, statusFilter, routeFilter, sourceFilter, searchTerm, startDate, endDate]);
-  }, [callJobs, statusFilter, routeFilter, searchTerm, startDate, endDate]);
 
   // Overall Statistics & Analytics
   const totalCalls = filteredJobs.length;
