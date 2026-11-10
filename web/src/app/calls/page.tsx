@@ -35,10 +35,7 @@ import {
   Info,
   Trash2,
   Sliders,
-  Edit3,
-  Globe,
-  LayoutDashboard,
-  Megaphone
+  Edit3
 } from 'lucide-react';
 import { exportCallsPdf } from '@/utils/pdfExport';
 import ClickToCopy from '@/components/ClickToCopy';
@@ -161,6 +158,7 @@ export default function CallsPage() {
       return true;
     });
   }, [callJobs, statusFilter, routeFilter, sourceFilter, searchTerm, startDate, endDate]);
+  }, [callJobs, statusFilter, routeFilter, searchTerm, startDate, endDate]);
 
   // Overall Statistics & Analytics
   const totalCalls = filteredJobs.length;
@@ -327,10 +325,7 @@ export default function CallsPage() {
       isAnonymous,
       anonymousId: isAnonymous ? (anonymousId || `ANON-CLOAK-${Math.floor(1000 + Math.random() * 9000)}`) : undefined,
       audio: selectedAudio,
-      recipientNames,
-      source: broadcastSource,
-      sourceDetails: broadcastSource === 'podcast' ? `Podcast Broadcast (Track [${selectedAudio}])` :
-                     broadcastSource === 'api' ? 'API Integration Broadcast' : 'Dashboard Batch Dialer'
+      recipientNames
     });
 
     setIsBroadcasting(false);
@@ -645,12 +640,11 @@ export default function CallsPage() {
         <table className="table table-sm">
           <thead>
             <tr className="border-b border-base-200 text-[11px] uppercase tracking-wider text-base-content/60">
-              <th>Origin & Trigger</th>
               <th>Target Recipient</th>
               <th>Status & Feedback</th>
               <th>Talk Duration</th>
               <th>Dispatched Route</th>
-              <th>Initiated By</th>
+              <th>Requester Identity</th>
               <th>Audio Track Prompt</th>
               <th>Timestamp</th>
               <th className="text-right">Actions</th>
@@ -659,7 +653,7 @@ export default function CallsPage() {
           <tbody className="divide-y divide-base-200 text-xs">
             {filteredJobs.length === 0 ? (
               <tr>
-                <td colSpan={9} className="text-center py-10 text-base-content/40">
+                <td colSpan={8} className="text-center py-10 text-base-content/40">
                   <div className="flex flex-col items-center justify-center gap-2">
                     <Phone className="w-8 h-8 opacity-20" />
                     <p className="font-semibold">No call records found matching criteria</p>
@@ -670,36 +664,6 @@ export default function CallsPage() {
             ) : (
               filteredJobs.map(job => (
                 <tr key={job._id} className="hover:bg-base-200/40 transition-colors">
-                  {/* Origin & Trigger */}
-                  <td>
-                    <div className="space-y-1">
-                      {job.source === 'api' ? (
-                        <span className="badge badge-info badge-sm gap-1 font-bold text-[10px]">
-                          <Globe className="w-3 h-3" /> API Trigger
-                        </span>
-                      ) : job.source === 'podcast' ? (
-                        <span className="badge badge-secondary badge-sm gap-1 font-bold text-[10px]">
-                          <Radio className="w-3 h-3" /> Podcast
-                        </span>
-                      ) : job.source === 'campaign' ? (
-                        <span className="badge badge-accent badge-sm gap-1 font-bold text-[10px]">
-                          <Megaphone className="w-3 h-3" /> Campaign
-                        </span>
-                      ) : (
-                        <span className="badge badge-primary badge-sm gap-1 font-bold text-[10px]">
-                          <LayoutDashboard className="w-3 h-3" /> Dashboard
-                        </span>
-                      )}
-                      {job.sourceDetails ? (
-                        <span className="text-[10px] text-base-content/60 font-mono block max-w-[140px] truncate" title={job.sourceDetails}>
-                          {job.sourceDetails}
-                        </span>
-                      ) : (
-                        <span className="text-[9px] text-base-content/40 block">Direct Dispatch</span>
-                      )}
-                    </div>
-                  </td>
-
                   {/* Recipient */}
                   <td>
                     <div>
@@ -770,7 +734,7 @@ export default function CallsPage() {
                     )}
                   </td>
 
-                  {/* Initiated By / Requester */}
+                  {/* Requester Identity */}
                   <td>
                     {job.isAnonymous ? (
                       <div className="flex items-center gap-1">
@@ -785,21 +749,9 @@ export default function CallsPage() {
                         <span className="font-semibold text-base-content text-[11px] block">
                           {job.userName || 'Admin System'}
                         </span>
-                        <div className="flex items-center gap-1 mt-0.5">
-                          <span className="badge badge-ghost badge-xs text-[9px] uppercase font-bold">
-                            {job.userRole || 'moderator'}
-                          </span>
-                          {job.clientIp && (
-                            <span className="text-[9px] text-base-content/40 font-mono truncate max-w-[90px]" title={`Client IP: ${job.clientIp}`}>
-                              {job.clientIp}
-                            </span>
-                          )}
-                        </div>
-                        {job.userEmail && (
-                          <span className="text-[9px] text-base-content/50 block font-mono truncate max-w-[120px]" title={job.userEmail}>
-                            {job.userEmail}
-                          </span>
-                        )}
+                        <span className="badge badge-ghost badge-xs text-[9px] uppercase">
+                          {job.userRole || 'moderator'}
+                        </span>
                       </div>
                     )}
                   </td>
@@ -1003,34 +955,6 @@ export default function CallsPage() {
                 )}
               </div>
 
-              {/* Broadcast Origin / Category */}
-              <div>
-                <label className="text-xs font-bold text-base-content/70 block mb-1">Broadcast Trigger Category (অরিজিন / চ্যানেল)</label>
-                <div className="grid grid-cols-3 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setBroadcastSource('podcast')}
-                    className={`btn btn-xs ${broadcastSource === 'podcast' ? 'btn-secondary text-white' : 'btn-ghost border border-base-300'} text-[11px] font-bold gap-1`}
-                  >
-                    <Radio className="w-3 h-3" /> Podcast Audio
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBroadcastSource('dashboard')}
-                    className={`btn btn-xs ${broadcastSource === 'dashboard' ? 'btn-primary text-white' : 'btn-ghost border border-base-300'} text-[11px] font-bold gap-1`}
-                  >
-                    <LayoutDashboard className="w-3 h-3" /> Dashboard
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBroadcastSource('api')}
-                    className={`btn btn-xs ${broadcastSource === 'api' ? 'btn-info text-white' : 'btn-ghost border border-base-300'} text-[11px] font-bold gap-1`}
-                  >
-                    <Globe className="w-3 h-3" /> API Simulation
-                  </button>
-                </div>
-              </div>
-
               {/* Audio Prompt */}
               <div>
                 <label className="text-xs font-bold text-base-content/70 block mb-1">DFPlayer Voice Prompt Audio Track</label>
@@ -1101,66 +1025,6 @@ export default function CallsPage() {
             </div>
 
             <div className="space-y-4 mt-4 text-xs">
-              {/* Call Origin & Initiator Audit Trace */}
-              <div className="p-3.5 rounded-xl bg-base-200/60 border border-base-300 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] uppercase font-bold text-base-content/60 flex items-center gap-1.5">
-                    <Activity className="w-3.5 h-3.5 text-primary" /> Call Origin & Initiator Audit Trace (কোথা থেকে এবং কোন ইউজার)
-                  </span>
-                  <span className="badge badge-outline badge-xs font-mono text-[9px] uppercase">Audit Verified</span>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className="p-2.5 rounded-lg bg-base-100 border border-base-200 shadow-2xs">
-                    <span className="text-[10px] text-base-content/50 block font-bold uppercase">Call Origin / Trigger:</span>
-                    <div className="mt-1">
-                      {selectedJobForDetail.source === 'api' ? (
-                        <span className="badge badge-info badge-sm gap-1 font-bold text-[10px]">
-                          <Globe className="w-3 h-3" /> REST API Call
-                        </span>
-                      ) : selectedJobForDetail.source === 'podcast' ? (
-                        <span className="badge badge-secondary badge-sm gap-1 font-bold text-[10px]">
-                          <Radio className="w-3 h-3" /> Podcast Audio
-                        </span>
-                      ) : selectedJobForDetail.source === 'campaign' ? (
-                        <span className="badge badge-accent badge-sm gap-1 font-bold text-[10px]">
-                          <Megaphone className="w-3 h-3" /> Scheduled Campaign
-                        </span>
-                      ) : (
-                        <span className="badge badge-primary badge-sm gap-1 font-bold text-[10px]">
-                          <LayoutDashboard className="w-3 h-3" /> Web Dashboard
-                        </span>
-                      )}
-                    </div>
-                    <span className="text-[10px] font-mono text-base-content/70 block mt-1">
-                      {selectedJobForDetail.sourceDetails || 'Direct Dispatch Route'}
-                    </span>
-                  </div>
-
-                  <div className="p-2.5 rounded-lg bg-base-100 border border-base-200 shadow-2xs">
-                    <span className="text-[10px] text-base-content/50 block font-bold uppercase">Initiating User / Operator:</span>
-                    <span className="font-bold text-base-content block mt-1 text-sm">
-                      {selectedJobForDetail.isAnonymous ? (selectedJobForDetail.anonymousId || 'Anonymous Agent') : (selectedJobForDetail.userName || 'Admin Operator')}
-                    </span>
-                    <div className="flex items-center gap-1 mt-0.5">
-                      <span className="badge badge-ghost badge-xs uppercase font-semibold">
-                        {selectedJobForDetail.isAnonymous ? 'Cloaked CLI' : (selectedJobForDetail.userRole || 'moderator')}
-                      </span>
-                      {selectedJobForDetail.clientIp && (
-                        <span className="text-[9px] text-base-content/40 font-mono">
-                          IP: {selectedJobForDetail.clientIp}
-                        </span>
-                      )}
-                    </div>
-                    {selectedJobForDetail.userEmail && (
-                      <span className="text-[10px] text-base-content/50 font-mono block mt-0.5 truncate" title={selectedJobForDetail.userEmail}>
-                        {selectedJobForDetail.userEmail}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-
               {/* Recipient & Requester */}
               <div className="grid grid-cols-2 gap-3 bg-base-200/50 p-3 rounded-xl border border-base-200">
                 <div>
