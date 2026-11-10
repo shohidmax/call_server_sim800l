@@ -13,11 +13,15 @@ const io = new Server(server, { cors: { origin: '*' } });
 const PORT = process.env.PORT || 3000;
 
 // --- CLOUD CLUSTER BRIDGE ---
-// Allows local server instances to seamlessly route commands to cloud-connected ESP32s
-const CLOUD_BRIDGE_URL = process.env.CLOUD_CLUSTER_URL || 'https://sim800l.maxapi.esp32.site';
+// Only runs if explicitly enabled via CLOUD_CLUSTER_URL (prevents infinite loop if deployed to cloud)
+const CLOUD_BRIDGE_URL = process.env.CLOUD_CLUSTER_URL;
 let cloudBridgeSocket = null;
 
 function initCloudClusterBridge() {
+    if (!CLOUD_BRIDGE_URL) {
+        console.log('🌐 Standalone cluster node: Cloud Bridge disabled (no CLOUD_CLUSTER_URL specified).');
+        return;
+    }
     try {
         console.log(`🌐 Initializing Cloud Cluster Bridge to: ${CLOUD_BRIDGE_URL}`);
         cloudBridgeSocket = ioClient(CLOUD_BRIDGE_URL, {
@@ -36,11 +40,11 @@ function initCloudClusterBridge() {
             console.log(`⚠️ Cloud Cluster Bridge disconnected from ${CLOUD_BRIDGE_URL}`);
         });
 
-        // Mirror active device telemetry from cloud
+        // Mirror active device telemetry from cloud safely without triggering cascading storms
         cloudBridgeSocket.on('active_devices_update', (devices) => {
             if (Array.isArray(devices)) {
+                let updated = false;
                 devices.forEach(d => {
-                    // Only adopt if not connected directly to this local instance
                     if (!connectedESP32s.has(d.mac)) {
                         const existing = activeDeviceTelemetry.get(d.mac) || {};
                         activeDeviceTelemetry.set(d.mac, { 
@@ -49,9 +53,12 @@ function initCloudClusterBridge() {
                             isCloudNode: true,
                             lastSeen: d.lastSeen || Date.now()
                         });
+                        updated = true;
                     }
                 });
-                broadcastActiveDevices();
+                if (updated) {
+                    io.emit('active_devices_update', Array.from(activeDeviceTelemetry.values()));
+                }
             }
         });
 
@@ -64,7 +71,6 @@ function initCloudClusterBridge() {
                     isCloudNode: true,
                     lastSeen: Date.now()
                 });
-                broadcastActiveDevices();
                 io.emit('telemetry_update', data);
             }
         });
