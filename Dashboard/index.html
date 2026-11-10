@@ -472,9 +472,10 @@
             // Reattach manual command result listeners here so they aren't lost
             socket.on('dashboard_cmd_result', (data) => {
                  if (data.type === 'ussd') {
+                      if (typeof ussdTimeout !== 'undefined') clearTimeout(ussdTimeout);
                       const box = document.getElementById('ctrl-ussd-status');
                       box.classList.remove('hidden');
-                      box.innerText = data.data;
+                      box.innerText = data.decoded || data.data;
                       const btn = document.getElementById('btn-ussd');
                       btn.innerHTML = 'Send Code';
                       btn.disabled = false;
@@ -571,8 +572,16 @@
 
             container.innerHTML = devices.map(data => `
                 <div onclick="openControlModal('${data.mac}')" class="border border-slate-200 rounded-lg p-5 bg-slate-50 relative cursor-pointer hover:border-blue-400 hover:shadow-md transition-all group">
-                    <div class="absolute top-4 right-4">
-                        <span class="px-2.5 py-1 rounded-full bg-green-100 text-green-700 text-xs font-semibold shadow-sm"><i class="fa-solid fa-wifi mr-1"></i> Online</span>
+                    <div class="absolute top-4 right-4 text-right">
+                        ${data.status === 'offline' ? `
+                            <span class="px-2.5 py-1 rounded-full bg-red-100 text-red-700 text-xs font-semibold shadow-sm"><i class="fa-solid fa-circle-xmark mr-1"></i> Offline</span>
+                            <p class="text-[10px] text-red-500 font-medium font-mono mt-1">Last Offline: ${data.lastOffline ? new Date(data.lastOffline).toLocaleString() : (data.lastSeen ? new Date(data.lastSeen).toLocaleString() : 'Recently')}</p>
+                        ` : data.status === 'busy' ? `
+                            <span class="px-2.5 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-semibold shadow-sm"><i class="fa-solid fa-phone-volume mr-1"></i> Dialing</span>
+                        ` : `
+                            <span class="px-2.5 py-1 rounded-full bg-green-100 text-green-700 text-xs font-semibold shadow-sm"><i class="fa-solid fa-wifi mr-1"></i> Online</span>
+                            <p class="text-[10px] text-green-600 font-mono mt-1">Last Seen: ${new Date(data.lastSeen || Date.now()).toLocaleTimeString()}</p>
+                        `}
                     </div>
                     <div class="flex items-center gap-3 mb-4">
                         <div class="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center text-indigo-600 group-hover:scale-110 transition-transform"><i class="fa-solid fa-microchip"></i></div>
@@ -643,14 +652,27 @@
             if(!mac) { alert("Enter Target MAC"); return; }
             socket.emit('dashboard_cmd_hangup', { mac });
         }
+        let ussdTimeout;
         function manualUssd() {
             const mac = getCtrlMac().trim();
             const code = document.getElementById('ctrl-ussd').value.trim();
             if(!mac || !code) return;
-            document.getElementById('btn-ussd').disabled = true;
-            document.getElementById('btn-ussd').innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Processing...';
-            document.getElementById('ctrl-ussd-status').classList.add('hidden');
+            const btn = document.getElementById('btn-ussd');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Inquiring Carrier...';
+            const box = document.getElementById('ctrl-ussd-status');
+            box.classList.remove('hidden');
+            box.innerText = `Transmitting ${code} to SIM800L module (${mac})...\nAwaiting carrier +CUSD response...`;
             socket.emit('dashboard_cmd_ussd', { mac, code });
+
+            clearTimeout(ussdTimeout);
+            ussdTimeout = setTimeout(() => {
+                if (btn.disabled) {
+                    btn.disabled = false;
+                    btn.innerHTML = 'Send Code';
+                    box.innerText = `[Timeout] No USSD response received within 20s for ${code}.`;
+                }
+            }, 20000);
         }
         
         function sendSms(e) {

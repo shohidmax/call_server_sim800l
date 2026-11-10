@@ -148,17 +148,15 @@ export default function DeviceControlPage({ params }: { params: Promise<{ mac: s
 
   const handleSendUssd = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!ussdCode) return;
+    if (!ussdCode || ussdLoading) return;
     setUssdLoading(true);
-    setUssdResult('Awaiting network +CUSD response...');
+    setUssdResult(`Transmitting ${ussdCode} to GSM network via SIM800L (${device.name})...\nAwaiting carrier +CUSD response...`);
     try {
       const resp = await triggerUssd(device.mac, ussdCode);
-      setTimeout(() => {
-        setUssdResult(`[SIM800L Response] +CUSD: 0, "Account Balance: 74.50 BDT, Validity: 30-Nov-2026", 15`);
-        setUssdLoading(false);
-      }, 1500);
-    } catch (e) {
-      setUssdResult('USSD command timed out.');
+      setUssdResult(`[SIM800L Live Response]\n${resp}`);
+    } catch (err: any) {
+      setUssdResult(`[USSD Error]\n${err?.message || 'USSD inquiry failed or carrier timed out.'}`);
+    } finally {
       setUssdLoading(false);
     }
   };
@@ -216,13 +214,28 @@ export default function DeviceControlPage({ params }: { params: Promise<{ mac: s
             <ArrowLeft className="w-5 h-5" />
           </Link>
           <div>
-            <div className="flex items-center gap-2">
-              <span className={`badge badge-xs font-bold uppercase py-2 px-2.5 ${
-                device.status === 'online' ? 'badge-success text-white' : 'badge-warning'
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`badge badge-xs font-bold uppercase py-2 px-2.5 gap-1 shadow-xs ${
+                device.status === 'online' 
+                  ? 'badge-success text-white' 
+                  : device.status === 'busy' 
+                  ? 'badge-warning text-white' 
+                  : 'badge-error text-white'
               }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${device.status === 'online' ? 'bg-white animate-pulse' : 'bg-white'}`}></span>
                 {device.status}
               </span>
               <ClickToCopy text={device.mac} className="text-xs font-semibold text-base-content/60" title="Click to copy MAC address" />
+              {device.status === 'offline' && (
+                <span className="badge badge-error/20 text-error badge-xs font-mono font-semibold py-2 px-2.5">
+                  Last Offline: {device.lastOffline ? new Date(device.lastOffline).toLocaleString() : (device.lastSeen ? new Date(device.lastSeen).toLocaleString() : 'Recently')}
+                </span>
+              )}
+              {device.status === 'online' && (
+                <span className="text-[11px] font-mono text-success/80">
+                  Last Seen: {new Date(device.lastSeen).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </span>
+              )}
             </div>
             <h1 className="text-xl md:text-2xl font-black text-base-content tracking-tight mt-1">
               {device.name}

@@ -201,12 +201,48 @@ export default function DevicesPage() {
                   </div>
                 </div>
 
-                <span className={`badge badge-sm font-bold uppercase text-[10px] py-1 px-2 ${
-                  dev.status === 'online' ? 'badge-success text-white' : dev.status === 'busy' ? 'badge-warning' : 'badge-ghost'
+                <span className={`badge badge-sm font-bold uppercase text-[10px] py-1 px-2.5 gap-1 ${
+                  dev.status === 'online' 
+                    ? 'badge-success text-white' 
+                    : dev.status === 'busy' 
+                    ? 'badge-warning text-white' 
+                    : 'badge-error text-white'
                 }`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${dev.status === 'online' ? 'bg-white animate-pulse' : 'bg-white'}`}></span>
                   {dev.status}
                 </span>
               </div>
+
+              {/* Online/Offline Status Banner with Last Offline Date & Time */}
+              {dev.status === 'offline' ? (
+                <div className="bg-error/10 border border-error/20 p-2.5 rounded-xl text-xs mb-3 flex flex-wrap items-center justify-between text-error font-medium gap-1">
+                  <div className="flex items-center gap-1.5 font-bold">
+                    <span className="w-2 h-2 rounded-full bg-error"></span>
+                    <span>Device Offline</span>
+                  </div>
+                  <div className="font-mono text-[10px] text-error/90">
+                    Last Offline: {dev.lastOffline ? new Date(dev.lastOffline).toLocaleString() : (dev.lastSeen ? new Date(dev.lastSeen).toLocaleString() : 'Recently')}
+                  </div>
+                </div>
+              ) : dev.status === 'busy' ? (
+                <div className="bg-warning/10 border border-warning/20 p-2.5 rounded-xl text-xs mb-3 flex items-center justify-between text-warning font-medium">
+                  <div className="flex items-center gap-1.5 font-bold">
+                    <span className="w-2 h-2 rounded-full bg-warning animate-ping"></span>
+                    <span>Active Call Busy</span>
+                  </div>
+                  <div className="font-mono text-[10px]">Dialing Line Occupied</div>
+                </div>
+              ) : (
+                <div className="bg-success/10 border border-success/20 p-2.5 rounded-xl text-xs mb-3 flex items-center justify-between text-success font-medium">
+                  <div className="flex items-center gap-1.5 font-bold">
+                    <span className="w-2 h-2 rounded-full bg-success animate-pulse"></span>
+                    <span>Online & Ready</span>
+                  </div>
+                  <div className="font-mono text-[10px] text-success/80">
+                    Last Seen: {new Date(dev.lastSeen).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </div>
+                </div>
+              )}
 
               {/* Vitals Grid */}
               <div className="grid grid-cols-2 gap-2 bg-base-200/40 p-3 rounded-xl text-xs mb-3">
@@ -515,11 +551,25 @@ export default function DevicesPage() {
                   <div>
                     <h3 className="font-bold text-base text-base-content flex items-center gap-2">
                       {quickHistoryDev.name}
-                      <span className="badge badge-success badge-xs font-bold uppercase">{quickHistoryDev.status}</span>
+                      <span className={`badge badge-xs font-bold uppercase gap-1 ${
+                        quickHistoryDev.status === 'online'
+                          ? 'badge-success text-white'
+                          : quickHistoryDev.status === 'busy'
+                          ? 'badge-warning text-white'
+                          : 'badge-error text-white'
+                      }`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${quickHistoryDev.status === 'online' ? 'bg-white animate-pulse' : 'bg-white'}`}></span>
+                        {quickHistoryDev.status}
+                      </span>
                     </h3>
                     <p className="text-xs font-mono text-base-content/60">
                       MAC: {quickHistoryDev.mac} • SIM: {quickHistoryDev.sim_number} ({quickHistoryDev.sim_operator})
                     </p>
+                    {quickHistoryDev.status === 'offline' && (
+                      <p className="text-[11px] font-mono text-error font-medium mt-0.5">
+                        Last Offline: {quickHistoryDev.lastOffline ? new Date(quickHistoryDev.lastOffline).toLocaleString() : (quickHistoryDev.lastSeen ? new Date(quickHistoryDev.lastSeen).toLocaleString() : 'Recently')}
+                      </p>
+                    )}
                   </div>
                 </div>
 

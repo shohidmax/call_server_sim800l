@@ -108,6 +108,30 @@ JWT_EXPIRES_IN=7d
   - Physical & Virtual MACs: Click to copy on Devices (`/devices`), Virtual Modems (`/devices/virtual`), Controls (`/devices/[mac]`), and Dashboard (`/`).
   - Phone Numbers: Click to copy on Voice Calls (`/calls`), Inbound Calls (`/calls/incoming`), SMS (`/sms`), Campaigns (`/campaigns`), and Controls (`/devices/[mac]`).
   - System IDs: Click to copy on Job IDs, Virtual IDs, Campaign IDs, and Anonymous Cloak IDs.
+- [x] **High-Availability Cloud Architecture & Automatic Failover**:
+  - **Primary Main Server**: `800lcall.espserver.site` (SSL Port 443 via WebSocket / Socket.IO)
+  - **Secondary Backup Server**: `sim800l.maxapi.esp32.site` (SSL Port 443 with instant auto-failover)
+  - **ESP32 Firmware (`Farmwire/callServer.ino`)**: Configured with automatic 20-second unresponsive watchdog. Upon connection timeout or SSL error, switches seamlessly between primary and secondary host with serial logging.
+  - **Next.js Web Portal (`web/`)**: Added multi-host failover in `DataContext.tsx` (`.env.local`), active host indicator pill in Navbar, dynamic API routing for call broadcasts and telemetry.
+  - **Legacy HTML Dashboard (`Dashboard/index.html`)**: Configured with dual host reconnection logic.
+- [x] **Real-Time Device Online / Offline Detection & Last Offline Date/Time Tracking**:
+  - **Backend Vital Watchdog (`Server/server.js`)**: Real-time disconnect listener marks dropped ESP32 devices as `offline` with an exact Unix timestamp (`lastOffline`). Background watchdog runs every 10s to detect ungraceful WiFi/power dropouts (>35s silence) and broadcasts `telemetry_update` and `active_devices_update`.
+  - **Dashboard Vitals (`web/src/app/page.tsx`)**: Displays real-time Online (pulsing green dot) and Offline (solid red dot) badges with a dedicated status bar showing `Last Offline: DD/MM/YYYY, HH:MM:SS` and KPI counter (`X Online • Y Offline`).
+  - **Fleet Management (`web/src/app/devices/page.tsx`)**: High-contrast status chips and dedicated offline banner with exact timestamp on device cards and history modal.
+  - **Device Control Terminal (`web/src/app/devices/[mac]/page.tsx`)**: Prominent `Device Offline` pill with exact disconnection date and time.
+  - **Standalone Dashboard (`Dashboard/index.html`)**: Dynamic Online vs Offline badge with Last Offline date & time.
+- [x] **Full USSD Subsystem Overhaul & UCS2 Decoding**:
+  - **Firmware Engine (`Farmwire/callServer.ino`)**: Rewrote `executeUSSD(code)` with active session clearing (`AT+CUSD=2`), GSM charset initialization (`AT+CSCS="GSM"`), dual-mode negotiation (retries without DCS 15 if rejected by carrier), and complete dual-quote parsing to prevent message truncation. Handled asynchronous unsolicited `+CUSD:` in `simBuffer`. Included `mac` and `code` in `esp32_cmd_result` payload.
+  - **Backend Parser (`Server/server.js`)**: Added `decodeUssdPayload(raw)` to detect and decode Unicode/UCS2 hex payloads into human-readable text (Bengali/English) before relaying via `dashboard_cmd_result`.
+  - **Real-Time Web Terminal (`web/src/context/DataContext.tsx` & `web/src/app/devices/[mac]/page.tsx`)**: Replaced fake static `setTimeout` with a real `Promise<string>` that listens for live `dashboard_cmd_result` with 22-second GSM network safety timeout and displays actual carrier balance/menu responses.
+  - **Standalone Dashboard (`Dashboard/index.html`)**: Integrated decoded responses with timeout fallback in `manualUssd()`.
+- [x] **ESP32 Hardware Flashed & Debugged (COM13)**:
+  - **Hardware Flash**: Successfully compiled `callServer.ino` with `arduino-cli` and flashed onto ESP32 Dev Module (Chip `ESP32-D0WD-V3`, MAC `44:1D:64:BD:22:EC`) on port `COM13` at 921600 baud.
+  - **Live Hardware Telemetry Verified**:
+    - Boot: Initialized DFPlayer Mini online.
+    - Wi-Fi: Connected to SSID `War` with IP `192.168.1.8`.
+    - Failover: Detected `800lcall.espserver.site` unresponsive, automatically failed over to secondary backup server `sim800l.maxapi.esp32.site` over SSL 443.
+    - Cloud Registration: Connected via WebSocket (`/socket.io/?EIO=4`) and dispatched `esp32_register` with MAC `44:1D:64:BD:22:EC`.
 - [x] **Mobile Responsiveness & Clean English UI**:
   - 100% English interface across all 20 pages.
   - Responsive layouts, modals, and tables across all smartphone and tablet viewports.

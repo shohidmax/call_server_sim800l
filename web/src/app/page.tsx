@@ -28,6 +28,7 @@ export default function DashboardPage() {
 
   // Metrics
   const onlineDevices = devices.filter(d => d.status === 'online').length;
+  const offlineDevices = devices.filter(d => d.status === 'offline').length;
   const busyDevices = devices.filter(d => d.status === 'busy').length;
   const totalCalls = callJobs.length;
   const successfulCalls = callJobs.filter(c => c.status === 'success').length;
@@ -85,6 +86,11 @@ export default function DashboardPage() {
               <span className="text-xs font-semibold text-success flex items-center gap-0.5">
                 <CheckCircle2 className="w-3 h-3" /> {onlineDevices} Online
               </span>
+              {offlineDevices > 0 && (
+                <span className="text-xs font-semibold text-error flex items-center gap-0.5">
+                  • {offlineDevices} Offline
+                </span>
+              )}
             </div>
             <p className="text-[11px] text-base-content/50 mt-1 truncate">
               {busyDevices > 0 ? `${busyDevices} nodes dialing active call` : 'All channels stand by'}
@@ -182,12 +188,48 @@ export default function DashboardPage() {
                       <ClickToCopy text={dev.mac} className="text-[11px] text-base-content/60" title="Click to copy MAC address" />
                     </div>
                   </div>
-                  <span className={`badge badge-xs font-semibold capitalize py-2 px-2.5 ${
-                    dev.status === 'online' ? 'badge-success' : dev.status === 'busy' ? 'badge-warning' : 'badge-neutral'
+                  <span className={`badge badge-xs font-bold uppercase py-2 px-2.5 gap-1 shadow-xs ${
+                    dev.status === 'online' 
+                      ? 'badge-success text-white' 
+                      : dev.status === 'busy' 
+                      ? 'badge-warning text-white' 
+                      : 'badge-error text-white'
                   }`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${dev.status === 'online' ? 'bg-white animate-pulse' : 'bg-white'}`}></span>
                     {dev.status}
                   </span>
                 </div>
+
+                {/* Device Status & Offline Timestamp Bar */}
+                {dev.status === 'offline' ? (
+                  <div className="mt-2.5 px-2.5 py-1.5 rounded-lg bg-error/10 border border-error/20 flex flex-wrap items-center justify-between text-[11px] text-error font-medium gap-1">
+                    <span className="flex items-center gap-1.5 font-bold">
+                      <span className="w-2 h-2 rounded-full bg-error"></span>
+                      Device Offline
+                    </span>
+                    <span className="font-mono text-[10px] text-error/90">
+                      Offline At: {dev.lastOffline ? new Date(dev.lastOffline).toLocaleString() : (dev.lastSeen ? new Date(dev.lastSeen).toLocaleString() : 'Recently')}
+                    </span>
+                  </div>
+                ) : dev.status === 'busy' ? (
+                  <div className="mt-2.5 px-2.5 py-1 rounded-lg bg-warning/10 border border-warning/20 flex items-center justify-between text-[11px] text-warning font-medium">
+                    <span className="flex items-center gap-1.5 font-bold">
+                      <span className="w-2 h-2 rounded-full bg-warning animate-ping"></span>
+                      Dialing / Active Call
+                    </span>
+                    <span className="font-mono text-[10px] text-warning/90">Channel Occupied</span>
+                  </div>
+                ) : (
+                  <div className="mt-2.5 px-2.5 py-1 rounded-lg bg-success/10 border border-success/20 flex items-center justify-between text-[11px] text-success font-medium">
+                    <span className="flex items-center gap-1.5 font-bold">
+                      <span className="w-2 h-2 rounded-full bg-success animate-pulse"></span>
+                      Online & Ready
+                    </span>
+                    <span className="font-mono text-[10px] text-success/80">
+                      Last Seen: {new Date(dev.lastSeen).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </span>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-base-200 text-center">
                   <div>

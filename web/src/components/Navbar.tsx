@@ -20,7 +20,7 @@ import {
 
 export default function Navbar({ onOpenQuickDial }: { onOpenQuickDial?: () => void }) {
   const { currentUser, switchRole, logout, isAuthenticated } = useAuth();
-  const { serverConnected, devices, complaints } = useData();
+  const { serverConnected, devices, complaints, activeServerUrl } = useData();
 
   const openTickets = complaints.filter(c => c.status === 'open').length;
 
@@ -39,14 +39,20 @@ export default function Navbar({ onOpenQuickDial }: { onOpenQuickDial?: () => vo
         {/* Server Status Pill */}
         <div className="flex items-center gap-2">
           {serverConnected ? (
-            <div className="badge badge-success badge-sm gap-1 py-2 px-3 text-xs font-semibold shadow-xs">
+            <div 
+              className="badge badge-success badge-sm gap-1 py-2 px-2.5 text-[11px] font-semibold shadow-xs cursor-default"
+              title={`Active Host: ${activeServerUrl} (Main: 800lcall.espserver.site | Backup: sim800l.maxapi.esp32.site)`}
+            >
               <span className="w-2 h-2 rounded-full bg-success-content animate-pulse"></span>
-              Backend Online
+              <span>{activeServerUrl.includes('maxapi') ? 'Backup Server' : (activeServerUrl.includes('800lcall') ? 'Main Server' : 'Local Backend')}</span>
             </div>
           ) : (
-            <div className="badge badge-warning badge-sm gap-1 py-2 px-3 text-xs font-semibold shadow-xs">
+            <div 
+              className="badge badge-warning badge-sm gap-1 py-2 px-2.5 text-[11px] font-semibold shadow-xs cursor-default"
+              title="Connecting to Main (800lcall.espserver.site) / Backup (sim800l.maxapi.esp32.site)"
+            >
               <span className="w-2 h-2 rounded-full bg-warning-content"></span>
-              Standalone Mode
+              Failover Active
             </div>
           )}
 

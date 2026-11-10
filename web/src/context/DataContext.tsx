@@ -25,6 +25,7 @@ interface DataContextType {
   deviceEvents: DeviceActivityEvent[];
   campaigns: Campaign[];
   serverConnected: boolean;
+  activeServerUrl: string;
 
   // Actions
   addDevice: (device: Partial<Device>) => void;
@@ -159,6 +160,22 @@ const INITIAL_DEVICES: Device[] = [
     status: 'busy',
     battery: 68,
     lastSeen: Date.now() - 2000,
+    allowedUsers: ['admin@sim800l.local'],
+    sharedWith: []
+  },
+  {
+    mac: '28:CD:C1:55:66:77',
+    name: 'Sector 4 Auxiliary Node',
+    group: 'North Field Sector',
+    ip: '192.168.2.98',
+    wifi_rssi: -85,
+    sim_operator: 'Teletalk',
+    sim_signal: '42%',
+    sim_number: '+8801552334455',
+    status: 'offline',
+    battery: 15,
+    lastSeen: Date.now() - 3600000 * 2, // 2 hours ago
+    lastOffline: Date.now() - 3600000 * 2, // 2 hours ago
     allowedUsers: ['admin@sim800l.local'],
     sharedWith: []
   }
@@ -724,91 +741,227 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     setBehaviorLogs(prev => [newLog, ...prev.slice(0, 99)]);
   };
 
-  // Connect to backend Socket.IO & fetch initial DB jobs & SMS
+  // Host configuration: Main Cloud Server, Secondary Backup, and Local Development
+  const MAIN_HOST = process.env.NEXT_PUBLIC_MAIN_SERVER || 'https://800lcall.espserver.site';
+  const BACKUP_HOST = process.env.NEXT_PUBLIC_BACKUP_SERVER || 'https://sim800l.maxapi.esp32.site';
+  const LOCAL_HOST = 'http://localhost:3000';
+
+  const [activeServerUrl, setActiveServerUrl] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+        return LOCAL_HOST;
+      }
+    }
+    return MAIN_HOST;
+  });
+
+  // Connect to backend Socket.IO & fetch initial DB jobs & SMS with High-Availability Failover
   useEffect(() => {
-    const HOST = 'http://localhost:3000';
-    let socket: Socket;
+    let socket: Socket | null = null;
+    let connectErrors = 0;
 
-    try {
-      socket = io(HOST, { timeout: 3000, reconnectionAttempts: 3 });
-      setSocketInstance(socket);
+    const connectToHost = (host: string) => {
+      try {
+        if (socket) {
+          socket.disconnect();
+          socket = null;
+        }
 
-      socket.on('connect', () => {
-        setServerConnected(true);
-      });
+        console.log(`[Socket.IO] Attempting connection to: ${host}`);
+        const newSocket = io(host, { timeout: 4000, reconnectionAttempts: 2 });
+        socket = newSocket;
+        setSocketInstance(newSocket);
+        setActiveServerUrl(host);
 
-      socket.on('disconnect', () => {
-        setServerConnected(false);
-      });
+        newSocket.on('connect', () => {
+          setServerConnected(true);
+          connectErrors = 0;
+          console.log(`[Socket.IO] Successfully connected to host: ${host}`);
 
-      socket.on('telemetry_update', (data: any) => {
-        setDevices(prev => {
-          const index = prev.findIndex(d => d.mac === data.mac);
-          if (index !== -1) {
-            const updated = [...prev];
-            updated[index] = { ...updated[index], ...data, lastSeen: Date.now() };
-            return updated;
-          }
-          return [...prev, {
-            mac: data.mac,
-            name: 'Discovered SIM800L Node',
-            group: 'Uncategorized',
-            ip: data.ip || '0.0.0.0',
-            wifi_rssi: data.wifi_rssi || -60,
-            sim_operator: data.sim_operator || 'GSM',
-            sim_signal: data.sim_signal || '70%',
-            sim_number: data.sim_number || 'Unknown',
-            status: 'online',
-            lastSeen: Date.now(),
-            allowedUsers: [],
-            sharedWith: []
-          }];
+          // Fetch initial data from connected API
+          fetch(`${host}/api/jobs`)
+            .then(res => res.json())
+            .then(json => {
+              if (json && json.success && json.data) setCallJobs(json.data);
+              else if (Array.isArray(json)) setCallJobs(json);
+            })
+            .catch(() => {});
+
+          fetch(`${host}/api/sms`)
+            .then(res => res.json())
+            .then(json => {
+              if (json && json.success && json.data) setSmsMessages(json.data);
+              else if (Array.isArray(json)) setSmsMessages(json);
+            })
+            .catch(() => {});
         });
-      });
 
-      socket.on('dashboard_update', (data: any) => {
-        if (data.type === 'new_jobs') {
-          setCallJobs(prev => [...data.jobs, ...prev]);
-        } else if (data.type === 'job_update') {
-          setCallJobs(prev => {
-            const idx = prev.findIndex(j => j._id === data.job._id);
-            if (idx !== -1) {
+        newSocket.on('disconnect', () => {
+          setServerConnected(false);
+        });
+
+        newSocket.on('connect_error', (err) => {
+          connectErrors++;
+          console.warn(`[Socket.IO] Connection error to ${host} (attempt ${connectErrors}):`, err.message);
+
+          // Failover triggered after 2 consecutive connection failures
+          if (connectErrors >= 2) {
+            connectErrors = 0;
+            let nextHost = host;
+            if (host === LOCAL_HOST) {
+              nextHost = MAIN_HOST;
+            } else if (host === MAIN_HOST) {
+              nextHost = BACKUP_HOST;
+            } else {
+              nextHost = MAIN_HOST;
+            }
+            console.warn(`[Socket.IO] Failover triggered! Switching active backend to: ${nextHost}`);
+            connectToHost(nextHost);
+          }
+        });
+
+        // Multi-device telemetry broadcast from server
+        newSocket.on('active_devices_update', (incomingList: any[]) => {
+          if (!Array.isArray(incomingList)) return;
+          setDevices(prev => {
+            const nextList = [...prev];
+            incomingList.forEach(incoming => {
+              const idx = nextList.findIndex(d => d.mac === incoming.mac);
+              if (idx !== -1) {
+                const wasStatus = nextList[idx].status;
+                const newStatus = incoming.status || wasStatus;
+                let offlineTime = nextList[idx].lastOffline;
+                if (newStatus === 'offline' && (!offlineTime || wasStatus === 'online')) {
+                  offlineTime = incoming.lastOffline || Date.now();
+                } else if (incoming.lastOffline) {
+                  offlineTime = incoming.lastOffline;
+                }
+                nextList[idx] = {
+                  ...nextList[idx],
+                  ...incoming,
+                  status: newStatus,
+                  lastOffline: offlineTime,
+                  lastSeen: incoming.lastSeen || nextList[idx].lastSeen
+                };
+              } else {
+                nextList.push({
+                  mac: incoming.mac,
+                  name: incoming.name || 'Discovered SIM800L Node',
+                  group: incoming.group || 'Uncategorized',
+                  ip: incoming.ip || '0.0.0.0',
+                  wifi_rssi: incoming.wifi_rssi || -60,
+                  sim_operator: incoming.sim_operator || 'GSM',
+                  sim_signal: incoming.sim_signal || '70%',
+                  sim_number: incoming.sim_number || 'Unknown',
+                  status: incoming.status || 'online',
+                  lastSeen: incoming.lastSeen || Date.now(),
+                  lastOffline: incoming.lastOffline || (incoming.status === 'offline' ? Date.now() : undefined),
+                  allowedUsers: incoming.allowedUsers || [],
+                  sharedWith: []
+                });
+              }
+            });
+            return nextList;
+          });
+        });
+
+        // Single device telemetry or status update relay
+        newSocket.on('telemetry_update', (data: any) => {
+          setDevices(prev => {
+            const index = prev.findIndex(d => d.mac === data.mac);
+            if (index !== -1) {
               const updated = [...prev];
-              updated[idx] = data.job;
+              const wasStatus = updated[index].status;
+              const newStatus = data.status || wasStatus;
+              let offlineTime = updated[index].lastOffline;
+              if (newStatus === 'offline' && (!offlineTime || wasStatus === 'online')) {
+                offlineTime = data.lastOffline || Date.now();
+              } else if (data.lastOffline) {
+                offlineTime = data.lastOffline;
+              }
+              updated[index] = { 
+                ...updated[index], 
+                ...data, 
+                status: newStatus,
+                lastOffline: offlineTime,
+                lastSeen: data.lastSeen || (newStatus === 'online' ? Date.now() : updated[index].lastSeen)
+              };
               return updated;
             }
-            return [data.job, ...prev];
+            return [...prev, {
+              mac: data.mac,
+              name: 'Discovered SIM800L Node',
+              group: 'Uncategorized',
+              ip: data.ip || '0.0.0.0',
+              wifi_rssi: data.wifi_rssi || -60,
+              sim_operator: data.sim_operator || 'GSM',
+              sim_signal: data.sim_signal || '70%',
+              sim_number: data.sim_number || 'Unknown',
+              status: data.status || 'online',
+              lastSeen: Date.now(),
+              lastOffline: data.lastOffline || (data.status === 'offline' ? Date.now() : undefined),
+              allowedUsers: [],
+              sharedWith: []
+            }];
           });
-        }
-      });
+        });
 
-      socket.on('sms_update', (data: any) => {
-        if (data.type === 'new_sms') {
-          setSmsMessages(prev => [data.sms, ...prev]);
-        }
-      });
-    } catch (e) {
-      console.error('Socket init error:', e);
-    }
+        newSocket.on('dashboard_update', (data: any) => {
+          if (data.type === 'new_jobs') {
+            setCallJobs(prev => [...data.jobs, ...prev]);
+          } else if (data.type === 'job_update') {
+            setCallJobs(prev => {
+              const idx = prev.findIndex(j => j._id === data.job._id);
+              if (idx !== -1) {
+                const updated = [...prev];
+                updated[idx] = data.job;
+                return updated;
+              }
+              return [data.job, ...prev];
+            });
+          }
+        });
 
-    // Fetch initial data from local API
-    fetch(`${HOST}/api/jobs`)
-      .then(res => res.json())
-      .then(json => {
-        if (json.success && json.data) setCallJobs(json.data);
-      })
-      .catch(() => {});
+        newSocket.on('sms_update', (data: any) => {
+          if (data.type === 'new_sms') {
+            setSmsMessages(prev => [data.sms, ...prev]);
+          }
+        });
+      } catch (e) {
+        console.error('Socket init error:', e);
+      }
+    };
 
-    fetch(`${HOST}/api/sms`)
-      .then(res => res.json())
-      .then(json => {
-        if (json.success && json.data) setSmsMessages(json.data);
-      })
-      .catch(() => {});
+    connectToHost(activeServerUrl);
 
     return () => {
-      if (socket) socket.disconnect();
+      if (socket) (socket as Socket).disconnect();
     };
+  }, []);
+
+  // Periodic device online/offline watchdog (detects dead or dropped ESP32 gateways)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setDevices(prev => {
+        let changed = false;
+        const next = prev.map(dev => {
+          // If device marked online has been silent for > 45 seconds, mark offline with timestamp
+          if (dev.status === 'online' && dev.lastSeen && (now - dev.lastSeen > 45000)) {
+            changed = true;
+            return {
+              ...dev,
+              status: 'offline' as const,
+              lastOffline: dev.lastOffline || dev.lastSeen || now
+            };
+          }
+          return dev;
+        });
+        return changed ? next : prev;
+      });
+    }, 10000);
+
+    return () => clearInterval(interval);
   }, []);
 
   // Device Activity Logger
@@ -1018,23 +1171,63 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     return true;
   };
 
-  const triggerUssd = async (mac: string, code: string): Promise<string> => {
-    if (socketInstance) {
+  const triggerUssd = (mac: string, code: string): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      recordLog('USSD_QUERY', code, `Queried USSD code ${code} on ${mac}`);
+
+      // Standalone simulation fallback if server is offline or not connected
+      if (!socketInstance || !serverConnected) {
+        setTimeout(() => {
+          const simulatedResp = `[Simulated / Standalone] +CUSD: 0, "Your account balance: 82.40 BDT. Validity: 15-Dec-2026.", 15`;
+          recordDeviceEvent({
+            deviceMac: mac,
+            type: 'USSD_QUERY',
+            actorName: currentUser?.name || 'Operator',
+            actorEmail: currentUser?.email,
+            actorRole: currentUser?.role,
+            actionTitle: `USSD Query Result: ${code}`,
+            description: simulatedResp,
+            metadata: { code, result: simulatedResp },
+            severity: 'info'
+          });
+          resolve(simulatedResp);
+        }, 1200);
+        return;
+      }
+
+      let timeoutTimer: NodeJS.Timeout;
+
+      const resultHandler = (data: any) => {
+        if (data && data.type === 'ussd' && (!data.mac || data.mac === mac)) {
+          clearTimeout(timeoutTimer);
+          socketInstance.off('dashboard_cmd_result', resultHandler);
+          const finalResult = data.decoded || data.data || `+CUSD: 0, "OK"`;
+
+          recordDeviceEvent({
+            deviceMac: mac,
+            type: 'USSD_QUERY',
+            actorName: currentUser?.name || 'Operator',
+            actorEmail: currentUser?.email,
+            actorRole: currentUser?.role,
+            actionTitle: `USSD Query Reply: ${code}`,
+            description: finalResult,
+            metadata: { code, result: finalResult },
+            severity: 'info'
+          });
+
+          resolve(finalResult);
+        }
+      };
+
+      socketInstance.on('dashboard_cmd_result', resultHandler);
       socketInstance.emit('dashboard_cmd_ussd', { mac, code });
-    }
-    recordLog('USSD_QUERY', code, `Queried USSD code ${code} on ${mac}`);
-    recordDeviceEvent({
-      deviceMac: mac,
-      type: 'USSD_QUERY',
-      actorName: currentUser?.name || 'Operator',
-      actorEmail: currentUser?.email,
-      actorRole: currentUser?.role,
-      actionTitle: `USSD Query Executed: ${code}`,
-      description: `Dispatched carrier inquiry command ${code} to cellular network.`,
-      metadata: { code },
-      severity: 'info'
+
+      // Safety timeout: 22 seconds for GSM carrier network roundtrip
+      timeoutTimer = setTimeout(() => {
+        socketInstance.off('dashboard_cmd_result', resultHandler);
+        reject(new Error(`USSD Timeout: Carrier did not reply within 22 seconds for code ${code}`));
+      }, 22000);
     });
-    return `USSD request '${code}' sent to device ${mac}. Waiting for network broadcast...`;
   };
 
   const triggerSms = async (mac: string, phone: string, message: string): Promise<boolean> => {
@@ -1166,7 +1359,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     };
 
     try {
-      await fetch('http://localhost:3000/api/broadcast', {
+      await fetch(`${activeServerUrl}/api/broadcast`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -1589,6 +1782,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         deviceEvents,
         campaigns,
         serverConnected,
+        activeServerUrl,
         addDevice,
         updateDevice,
         deleteDevice,

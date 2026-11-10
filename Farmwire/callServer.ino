@@ -275,35 +275,128 @@ const char index_html[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
-// --- HELPER FUNCTION: Wait for USSD Response ---
-String waitUSSDResponse(uint32_t timeout) {
-  uint32_t startTime = millis();
-  String responseBuffer = "";
+// --- HELPER FUNCTION: Execute USSD with Carrier Fallback & Complete Response Extraction ---
+String executeUSSD(String code) {
+  isSimBusy = true;
 
-  while (millis() - startTime < timeout) {
+  // 1. Flush any residual serial data
+  while (sim800l.available()) sim800l.read();
+
+  // 2. Clear any lingering USSD session to prevent +CME ERROR: 512
+  sim800l.println("AT+CUSD=2");
+  delay(150);
+  while (sim800l.available()) sim800l.read();
+
+  // 3. Set character set to standard GSM
+  sim800l.println("AT+CSCS=\"GSM\"");
+  delay(100);
+  while (sim800l.available()) sim800l.read();
+
+  // 4. Send USSD command with DCS=15 first
+  Serial.print("[USSD] Transmitting: "); Serial.println(code);
+  sim800l.print("AT+CUSD=1,\"");
+  sim800l.print(code);
+  sim800l.println("\",15");
+
+  // Check initial modem acceptance (up to 800ms)
+  unsigned long t0 = millis();
+  String initResp = "";
+  while (millis() - t0 < 800) {
     while (sim800l.available()) {
       char c = sim800l.read();
-      responseBuffer += c;
-      Serial.write(c); // Mirror to Serial Monitor
+      initResp += c;
+    }
+    if (initResp.indexOf("OK") != -1 || initResp.indexOf("ERROR") != -1) break;
+    delay(10);
+  }
+
+  // If DCS=15 rejected by operator/modem, retry without DCS parameter
+  if (initResp.indexOf("ERROR") != -1 && initResp.indexOf("+CUSD:") == -1) {
+    Serial.println("[USSD] DCS=15 rejected, retrying without DCS parameter...");
+    sim800l.println("AT+CUSD=2");
+    delay(100);
+    while (sim800l.available()) sim800l.read();
+    sim800l.print("AT+CUSD=1,\"");
+    sim800l.print(code);
+    sim800l.println("\"");
+  }
+
+  // 5. Wait for unsolicited +CUSD network reply (up to 20 seconds)
+  String buffer = "";
+  unsigned long startWait = millis();
+
+  while (millis() - startWait < 20000) {
+    while (sim800l.available()) {
+      char c = sim800l.read();
+      buffer += c;
+      Serial.write(c); // Echo to serial monitor
     }
 
-    // Check if the response buffer contains the USSD reply tag (+CUSD:)
-    if (responseBuffer.indexOf("+CUSD:") != -1 &&
-        responseBuffer.indexOf("\"", responseBuffer.indexOf("+CUSD:") + 7) !=
-            -1) {
-      // Allow a tiny delay to catch the end of the message carriage returns
-      delay(100);
-      while (sim800l.available()) {
-        responseBuffer += (char)sim800l.read();
+    int cusdIdx = buffer.indexOf("+CUSD:");
+    if (cusdIdx != -1) {
+      // Check for quoted response: +CUSD: <m>,"<text>"...
+      int firstQuote = buffer.indexOf("\"", cusdIdx);
+      if (firstQuote != -1) {
+        int secondQuote = buffer.indexOf("\"", firstQuote + 1);
+        if (secondQuote != -1) {
+          // Complete quoted response arrived! Give brief buffer drain delay
+          delay(150);
+          while (sim800l.available()) buffer += (char)sim800l.read();
+          break;
+        }
+      } else {
+        // Unquoted response (e.g. +CUSD: 2 or +CUSD: 0)
+        int nl = buffer.indexOf("\n", cusdIdx);
+        if (nl != -1) {
+          delay(50);
+          while (sim800l.available()) buffer += (char)sim800l.read();
+          break;
+        }
       }
-      return responseBuffer;
     }
+
+    if (buffer.indexOf("+CME ERROR") != -1) {
+      delay(50);
+      while (sim800l.available()) buffer += (char)sim800l.read();
+      break;
+    }
+    delay(20);
   }
 
-  if (responseBuffer.length() > 0) {
-    return "Partial response/Timeout: \n" + responseBuffer;
+  isSimBusy = false;
+
+  // 6. Clean and extract full +CUSD line
+  int cusdIdx = buffer.indexOf("+CUSD:");
+  if (cusdIdx != -1) {
+    String cusdLine = buffer.substring(cusdIdx);
+    int endIdx = cusdLine.indexOf("\r\n\r\n");
+    if (endIdx != -1) cusdLine = cusdLine.substring(0, endIdx);
+    cusdLine.trim();
+    return cusdLine;
   }
-  return "Error: Carrier did not respond in time.";
+
+  if (buffer.indexOf("+CME ERROR") != -1) {
+    int errIdx = buffer.indexOf("+CME ERROR");
+    String errLine = buffer.substring(errIdx);
+    errLine.trim();
+    return "Network Error: " + errLine;
+  }
+
+  if (buffer.indexOf("ERROR") != -1) {
+    return "Error: Command rejected by GSM network or SIM card.";
+  }
+
+  if (buffer.length() > 0) {
+    buffer.trim();
+    return "Partial response: " + buffer;
+  }
+
+  return "Error: Carrier did not respond within 20 seconds.";
+}
+
+// --- HELPER FUNCTION: Wait for USSD Response ---
+String waitUSSDResponse(uint32_t timeout) {
+  return executeUSSD("*121#");
 }
 
 // --- HELPER FUNCTION: Send Basic AT Command ---
@@ -379,9 +472,15 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload,
                    size_t length) {
   switch (type) {
   case sIOtype_DISCONNECT:
-    Serial.printf("[IOc] Disconnected!\n");
+    Serial.printf("[IOc] Disconnected from: %s\n", currentHost.c_str());
     isSocketConnected = false;
     lastSocketDisconnectTime = millis(); // Mark failover countdown
+    break;
+
+  case sIOtype_ERROR:
+    Serial.printf("[IOc] Socket/SSL Error on %s: %s\n", currentHost.c_str(), payload);
+    isSocketConnected = false;
+    if (lastSocketDisconnectTime == 0) lastSocketDisconnectTime = millis();
     break;
 
   case sIOtype_CONNECT:
@@ -430,43 +529,21 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload,
         isSimBusy = false;
       } else if (strcmp(eventName, "esptarget_cmd_ussd") == 0 && !isSimBusy) {
         String code = doc[1]["code"].as<String>();
-        Serial.println("[MANUAL] USSD: " + code);
-        isSimBusy = true;
-        while (sim800l.available())
-          sim800l.read();
+        Serial.println("[MANUAL] Socket USSD Request: " + code);
+        String ussdResponse = executeUSSD(code);
 
-        sim800l.print("AT+CUSD=1,\"");
-        sim800l.print(code);
-        sim800l.println("\",15");
-
-        String ussdResponse = "Timeout or Error";
-        unsigned long start = millis();
-        String tb = "";
-        while (millis() - start < 15000) {
-          while (sim800l.available()) {
-            char c = sim800l.read();
-            tb += c;
-          }
-          if (tb.indexOf("+CUSD:") != -1 &&
-              tb.indexOf("\"", tb.indexOf("+CUSD:") + 7) != -1) {
-            delay(100);
-            while (sim800l.available())
-              tb += (char)sim800l.read();
-            ussdResponse = tb;
-            break;
-          }
-        }
-        isSimBusy = false;
-
-        DynamicJsonDocument resDoc(512);
+        DynamicJsonDocument resDoc(1024);
         JsonArray array = resDoc.to<JsonArray>();
         array.add("esp32_cmd_result");
         JsonObject resObj = array.createNestedObject();
+        resObj["mac"] = macAddress;
         resObj["type"] = "ussd";
+        resObj["code"] = code;
         resObj["data"] = ussdResponse;
         String out;
         serializeJson(resDoc, out);
         socketIO.sendEVENT(out);
+        Serial.println("[IOc] Relayed USSD response to server: " + ussdResponse);
       } else if (strcmp(eventName, "esptarget_cmd_sendsms") == 0 &&
                  !isSimBusy) {
         String phone = doc[1]["phone"].as<String>();
@@ -627,7 +704,6 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload,
     }
   } break;
   case sIOtype_ACK:
-  case sIOtype_ERROR:
   case sIOtype_BINARY_EVENT:
   case sIOtype_BINARY_ACK:
     break;
@@ -818,8 +894,13 @@ void setup() {
   // Start the server
   server.begin();
 
-  // 4. Initialize Socket.IO connection
-  socketIO.beginSSL(currentHost, 443, "/socket.io/?EIO=4");
+  // 4. Initialize Socket.IO connection with Cloud Main/Backup Failover
+  Serial.println("[IOc] Initializing Cloud Socket.IO connection...");
+  Serial.print("[IOc] Primary Main Server: "); Serial.println(mainHost);
+  Serial.print("[IOc] Secondary Backup Server: "); Serial.println(backupHost);
+  Serial.print("[IOc] Connecting to: "); Serial.println(currentHost);
+  lastSocketDisconnectTime = millis();
+  socketIO.beginSSL(currentHost.c_str(), 443, "/socket.io/?EIO=4");
   socketIO.onEvent(socketIOEvent);
 
   // 4. Initialize SIM800L basic settings
@@ -923,6 +1004,35 @@ void loop() {
         }
       }
       simBuffer = ""; // Reset buffer after dealing with CMT
+    } else if (simBuffer.indexOf("+CUSD:") != -1) {
+      // Async +CUSD reply caught in buffer
+      unsigned long lastCharTime = millis();
+      while (millis() - lastCharTime < 150) {
+        while (sim800l.available()) {
+          char c = sim800l.read();
+          Serial.write(c);
+          simBuffer += c;
+          lastCharTime = millis();
+        }
+      }
+      int cusdIndex = simBuffer.indexOf("+CUSD:");
+      String cusdPayload = simBuffer.substring(cusdIndex);
+      int nlIdx = cusdPayload.indexOf("\r\n\r\n");
+      if (nlIdx != -1) cusdPayload = cusdPayload.substring(0, nlIdx);
+      cusdPayload.trim();
+
+      DynamicJsonDocument d(1024);
+      JsonArray arr = d.to<JsonArray>();
+      arr.add("esp32_cmd_result");
+      JsonObject p = arr.createNestedObject();
+      p["mac"] = macAddress;
+      p["type"] = "ussd";
+      p["data"] = cusdPayload;
+      String output;
+      serializeJson(d, output);
+      socketIO.sendEVENT(output);
+      Serial.println("[USSD ASYNC] Relayed unsolicited +CUSD to server!");
+      simBuffer = "";
     } else if (simBuffer.length() > 1500) {
       simBuffer = ""; // Prevent memory leak from noise over time, increased to
                       // 1500 to allow very long chunks before pruning
@@ -932,12 +1042,13 @@ void loop() {
   // Handle ongoing Socket.IO connection
   socketIO.loop();
 
-  // Failover Check Mechanism
-  if (!isSocketConnected && millis() - lastSocketDisconnectTime > socketFailoverTimeout) {
-    Serial.println("[IOc] Host unresponsive for 20s. Failover triggered! Switching server...");
+  // Failover Check Mechanism: Auto switch between mainHost and backupHost if disconnected for > 20s
+  if (!isSocketConnected && (millis() - lastSocketDisconnectTime > socketFailoverTimeout)) {
+    Serial.printf("[IOc] Host %s unresponsive for %lu ms. Failover triggered! Switching server...\n", currentHost.c_str(), socketFailoverTimeout);
     socketIO.disconnect();
     currentHost = (currentHost == mainHost) ? backupHost : mainHost;
-    socketIO.beginSSL(currentHost, 443, "/socket.io/?EIO=4");
+    Serial.printf("[IOc] Switching target host to: %s (SSL Port 443)\n", currentHost.c_str());
+    socketIO.beginSSL(currentHost.c_str(), 443, "/socket.io/?EIO=4");
     lastSocketDisconnectTime = millis(); // Reset countdown timer for the new host
   }
 

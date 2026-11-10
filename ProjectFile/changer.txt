@@ -176,3 +176,58 @@ JWT_EXPIRES_IN=7d
   - Table headers (`th`): Elevated to `#cbd5e1` text with subtle border dividers.
   - Badges: `badge-outline`, `badge-ghost`, and `badge-neutral` enhanced with `#e2e8f0` text and distinct borders.
   - Interactive Hover states: Adjusted table row hovers (`rgba(36, 47, 68, 0.7)`) and copy icon hover states for maximum clarity in dark mode without affecting light mode.
+
+### L. High-Availability Server Failover (`800lcall.espserver.site` & `sim800l.maxapi.esp32.site`)
+- **ESP32 Firmware (`Farmwire/callServer.ino`)**:
+  - `mainHost = "800lcall.espserver.site"` (Primary Cloud Server via SSL port 443)
+  - `backupHost = "sim800l.maxapi.esp32.site"` (Secondary High-Availability Failover Server)
+  - Added `sIOtype_ERROR` and connection watchdog: automatically triggers server switch if primary server is unresponsive for > 20 seconds.
+- **Next.js Web Portal (`web/src/context/DataContext.tsx` & `web/.env.local`)**:
+  - Environment variables `NEXT_PUBLIC_MAIN_SERVER` and `NEXT_PUBLIC_BACKUP_SERVER`.
+  - Dynamic multi-host failover: automatically falls over to the backup host if connection errors occur.
+  - Dynamic API dispatches for broadcast calls and telemetry.
+  - Active server status indicator pill in `Navbar.tsx` displaying live host status.
+
+### M. Device Online/Offline Lifecycle & Last Offline Date/Time Auditing
+- **Backend Architecture (`Server/server.js`)**:
+  - `activeDeviceTelemetry` preserves offline devices rather than purging them upon socket disconnect.
+  - On socket disconnect, stamps `status = 'offline'` and `lastOffline = Date.now()`, broadcasting `active_devices_update` and `telemetry_update`.
+  - Stale watchdog timer checks every 10 seconds for devices silent for > 35 seconds and marks them offline.
+- **Frontend Model (`web/src/types/device.ts` & `DataContext.tsx`)**:
+  - Added `lastOffline?: number | string` to `Device` interface.
+  - Client-side watchdog ensures dead connections transition to offline after 45 seconds without packet.
+- **Dashboard UI (`web/src/app/page.tsx`)**:
+  - Displays real-time green Online and red Offline badges.
+  - Device card offline notification banner with exact `Last Offline: DD/MM/YYYY, HH:MM:SS`.
+  - Fleet KPI counter updated to show both Online and Offline totals.
+- **Fleet Management & Controls (`web/src/app/devices/page.tsx` & `/devices/[mac]`)**:
+  - Offline status bar on device cards, device history modal, and control header showing exact timestamp.
+- **Standalone Dashboard (`Dashboard/index.html`)**:
+  - Replaced hardcoded online label with dynamic online/offline badge and `Last Offline` timestamp.
+
+### N. End-to-End USSD Subsystem & Unicode/UCS2 Decoding Overhaul
+- **Firmware Engine (`Farmwire/callServer.ino`)**:
+  - Engineered robust `executeUSSD(code)` function.
+  - Prepends `AT+CUSD=2` to cancel hung interactive USSD sessions (resolving `+CME ERROR: 512`).
+  - Sets standard character set (`AT+CSCS="GSM"`).
+  - Implements automatic DCS parameter fallback: attempts `AT+CUSD=1,"<code>",15` and retries `AT+CUSD=1,"<code>"` if DCS=15 is rejected by the operator network.
+  - Fixed premature string truncation by verifying both opening and closing quotation marks on incoming `+CUSD: <m>,"<str>",<dcs>`.
+  - Added unsolicited asynchronous `+CUSD:` handling in `simBuffer` loop.
+  - Added target `mac` and `code` attributes in `esp32_cmd_result` Socket.IO events.
+- **Backend Relay (`Server/server.js`)**:
+  - Added `decodeUssdPayload(raw)` regex parser to convert 16-bit UCS2 hex responses into readable Unicode (Bengali/English) text.
+  - Broadcasts decoded string in `dashboard_cmd_result` as `data.decoded`.
+- **Frontend Live Terminal (`web/src/context/DataContext.tsx` & `/devices/[mac]`)**:
+  - Transformed `triggerUssd` into a real `Promise<string>` with 22-second GSM network safety timer.
+  - Eliminated mock `setTimeout` that displayed fake static account balance; now displays the real carrier response directly on the USSD console.
+  - Logs USSD responses into the device activity audit trail.
+
+### O. Hardware Flashed and Live Verified on COM13
+- Target Chip: `ESP32-D0WD-V3` (4MB Flash, MAC: `44:1D:64:BD:22:EC`).
+- Firmware Compiled with `arduino-cli` using ESP32 Core v3.3.11.
+- Uploaded over `COM13` at 921600 baud.
+- Debug Log Confirmed:
+  - DFPlayer Mini initialized and online.
+  - Wi-Fi successfully connected (`192.168.1.8`).
+  - Automatic cloud failover switched to `sim800l.maxapi.esp32.site` on SSL 443.
+  - `esp32_register` event transmitted to cloud backend.

@@ -54,12 +54,17 @@ io.on('connection', (socket) => {
         const mac = data.mac;
         if (mac) {
             connectedESP32s.set(mac, socket.id);
-            if (!activeDeviceTelemetry.has(mac)) {
-                activeDeviceTelemetry.set(mac, { mac, ip: data.ip || 'Unknown', status: 'online', initializedDate: Date.now() });
-                broadcastActiveDevices();
-            }
-            console.log(`✅ ESP32 registered with MAC: ${mac} on socket: ${socket.id}`);
-            console.log(`✅ ESP32 registered with MAC: ${mac} on socket: ${socket.id}`);
+            const existing = activeDeviceTelemetry.get(mac) || {};
+            activeDeviceTelemetry.set(mac, { 
+                ...existing, 
+                mac, 
+                ip: data.ip || existing.ip || 'Unknown', 
+                status: 'online', 
+                lastSeen: Date.now(),
+                initializedDate: existing.initializedDate || Date.now() 
+            });
+            broadcastActiveDevices();
+            console.log(`✅ ESP32 registered with MAC: ${mac} on socket: ${socket.id} (Status: ONLINE)`);
             // Trigger dispatcher immediately to see if jobs are waiting
             if(typeof dispatchJobs === 'function') dispatchJobs();
         }
@@ -69,8 +74,10 @@ io.on('connection', (socket) => {
     socket.on('esp32_telemetry', (data) => {
         if (data.mac) {
             data.lastSeen = Date.now();
-            activeDeviceTelemetry.set(data.mac, data);
-            broadcastActiveDevices(); // Broad cast full state array
+            data.status = 'online';
+            const existing = activeDeviceTelemetry.get(data.mac) || {};
+            activeDeviceTelemetry.set(data.mac, { ...existing, ...data, status: 'online' });
+            broadcastActiveDevices(); // Broadcast full state array
         }
         io.emit('telemetry_update', data); // Keep backwards compatible relay
     });
@@ -140,8 +147,31 @@ io.on('connection', (socket) => {
         } catch(err) { console.error('Error saving hardware SMS:', err); }
     });
 
+    // Helper function to decode UCS2 hex text within +CUSD USSD messages
+    const decodeUssdPayload = (raw) => {
+        if (!raw || typeof raw !== 'string') return raw;
+        const quoteMatch = raw.match(/"([^"]+)"/);
+        if (quoteMatch && quoteMatch[1]) {
+            const inner = quoteMatch[1];
+            if (inner.length >= 4 && inner.length % 4 === 0 && /^[0-9A-Fa-f]+$/.test(inner)) {
+                let decoded = '';
+                for (let i = 0; i < inner.length; i += 4) {
+                    decoded += String.fromCharCode(parseInt(inner.substr(i, 4), 16));
+                }
+                if (!/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(decoded)) {
+                    return raw.replace(`"${inner}"`, `"${decoded}"`);
+                }
+            }
+        }
+        return raw;
+    };
+
     // Relayed generic manual command results (like USSD responses)
     socket.on('esp32_cmd_result', (data) => {
+        if (data && data.type === 'ussd' && data.data) {
+            data.decoded = decodeUssdPayload(data.data);
+            console.log(`📡 Relayed USSD response from MAC: ${data.mac || 'ESP32'} (Code: ${data.code || '-'}):`, data.decoded);
+        }
         io.emit('dashboard_cmd_result', data);
     });
 
@@ -193,14 +223,45 @@ io.on('connection', (socket) => {
         for (const [mac, id] of connectedESP32s.entries()) {
             if (id === socket.id) {
                 connectedESP32s.delete(mac);
-                activeDeviceTelemetry.delete(mac);
+                const existing = activeDeviceTelemetry.get(mac) || { mac };
+                const offlineTimestamp = Date.now();
+                existing.status = 'offline';
+                existing.lastOffline = offlineTimestamp;
+                activeDeviceTelemetry.set(mac, existing);
                 broadcastActiveDevices();
-                console.log(`🔻 ESP32 MAC ${mac} disconnected`);
+                io.emit('telemetry_update', { 
+                    mac, 
+                    status: 'offline', 
+                    lastOffline: offlineTimestamp 
+                });
+                console.log(`🔻 ESP32 MAC ${mac} disconnected - Marked OFFLINE (lastOffline: ${new Date(offlineTimestamp).toISOString()})`);
                 break;
             }
         }
     });
 });
+
+// Periodic device stale / offline watchdog (every 10 seconds)
+setInterval(() => {
+    let changed = false;
+    const now = Date.now();
+    for (const [mac, dev] of activeDeviceTelemetry.entries()) {
+        const isSocketAlive = connectedESP32s.has(mac);
+        // If device was online but socket dropped or no telemetry for > 35s
+        if (dev.status === 'online') {
+            if (!isSocketAlive || (dev.lastSeen && (now - dev.lastSeen > 35000))) {
+                dev.status = 'offline';
+                dev.lastOffline = dev.lastSeen || now;
+                changed = true;
+                console.log(`⏱️ Watchdog: Device ${mac} unresponsive for >35s. Marked OFFLINE at ${new Date(dev.lastOffline).toISOString()}.`);
+                io.emit('telemetry_update', { mac, status: 'offline', lastOffline: dev.lastOffline });
+            }
+        }
+    }
+    if (changed) {
+        broadcastActiveDevices();
+    }
+}, 10000);
 
 // Global Load Balancer Dispatcher
 const dispatchJobs = async () => {

@@ -311,3 +311,34 @@ Click-to-copy functionality is deployed across all 20 views:
 - **High-Contrast Dark Mode Overhaul**: Custom CSS overrides eliminate washed-out text (`text-base-content/40` - `/60`), elevating them to crisp, WCAG AAA compliant slate shades (`#cbd5e1` and `#94a3b8`).
 - **Surface Contrast**: Solid dark card backgrounds (`#151d2c`), deep canvas (`#0b0f19`), high-contrast table headers, white input text (`#f8fafc`), and distinct badge borders.
 - **Hydration Safe**: Suppressed hydration attributes and pre-hydration head scripts eliminate UI flash.
+
+---
+
+## 12. High-Availability Server Infrastructure & Automatic Failover
+The platform operates an automatic dual-host high-availability architecture across both hardware nodes and frontend web portals:
+- **Primary Main Server**: `800lcall.espserver.site` (Secure SSL WebSocket port 443)
+- **Secondary Backup Server**: `sim800l.maxapi.esp32.site` (Secure SSL WebSocket port 443 with instant failover)
+- **Hardware Watchdog**: ESP32 firmware monitors connection vitality; if the primary endpoint is unresponsive for more than 20 seconds or encounters handshake/SSL errors, it automatically fails over to the secondary endpoint.
+- **Web Portal Resilience**: The Next.js frontend and standalone dashboard maintain persistent telemetry via Socket.IO with multi-server failover, dynamically routing API calls to whichever node is online and healthy.
+
+---
+
+## 13. Real-Time Device Online / Offline Detection & Timestamp Auditing
+To ensure visibility into hardware gateway availability:
+- **Online State**: Verified by active WebSocket connection and regular periodic telemetry pings (every 10s). Represented by a glowing/pulsing green status badge.
+- **Offline State**: Triggered immediately upon socket disconnect or when no telemetry heartbeat is detected for > 35-45 seconds. Represented by a high-contrast red status badge.
+- **Last Offline Timestamp**: The exact date, time, and timestamp of disconnection (`lastOffline`) are recorded by the backend and displayed across:
+  - Dashboard Fleet Cards (`/`)
+  - Hardware Management Grid & Event Modals (`/devices`)
+  - Gateway Control Terminal (`/devices/[mac]`)
+  - Standalone HTML Dashboard (`Dashboard/index.html`)
+
+---
+
+## 14. USSD Inquiry & Mobile Operator Service Subsystem
+The platform features an end-to-end interactive USSD inquiry engine:
+- **Session Reset**: Pre-emptively issues `AT+CUSD=2` to cancel hung interactive USSD sessions, eliminating `+CME ERROR: 512`.
+- **Adaptive Protocol Negotiation**: Automatically sends standard alphabet USSD with fallback to raw mode if the operator rejects GSM DCS=15.
+- **Dual-Quote Buffer Assembly**: Verifies both opening and closing quote tags on incoming `+CUSD: <m>,"<content>",<dcs>` lines before terminating serial read, ensuring full multi-line balances and menu trees are received without truncation.
+- **Unicode & UCS2 Hex Decoding**: Detects 16-bit UCS2 hex responses commonly returned by Bangladeshi operators (Grameenphone, Banglalink, Robi, Teletalk) and translates them into human-readable Unicode (Bengali/English) characters.
+- **Asynchronous Live Console**: The device control terminal (`/devices/[mac]`) triggers the real hardware request and displays the actual carrier response live via WebSocket.

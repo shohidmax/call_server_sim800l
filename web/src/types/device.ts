@@ -12,6 +12,7 @@ export interface Device {
   status: DeviceStatus;
   battery?: number;
   lastSeen: number;
+  lastOffline?: number | string;
   allowedUsers: string[]; // user IDs or emails
   sharedWith: DeviceShare[];
   isVirtual?: boolean;
@@ -92,6 +93,7 @@ export interface DeviceActivityEvent {
     status?: string;
     audioTrack?: string;
     code?: string;
+    result?: string;
     messageText?: string;
     fieldChanged?: string;
     oldValue?: string;
