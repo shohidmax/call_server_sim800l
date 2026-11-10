@@ -1,0 +1,130 @@
+# Agent Implementation Prompts (`prompt.txt`)
+
+Use these curated prompts to guide step-by-step implementation, testing, and expansion across the codebase:
+
+---
+
+### 🔹 Prompt 1: Backend Auth & User Schema Implementation
+```
+Task: Implement User Authentication and JWT Security in Server/server.js.
+Requirements:
+1. Install bcryptjs and jsonwebtoken in Server/package.json.
+2. In Server/server.js, define the User schema with fields:
+   - username, email, password (bcrypt), role ('admin' | 'manager' | 'moderator' | 'user'), assignedDevices, status, createdAt.
+3. Implement POST /api/auth/signup, POST /api/auth/login, and GET /api/auth/me.
+4. Create authenticateToken and requireAdmin middlewares.
+5. Ensure all existing hardware Socket.IO connections (esp32_register, esp32_telemetry) continue working without interruption.
+```
+
+---
+
+### 🔹 Prompt 2: Scoped Device Management (Add & Edit Device)
+```
+Task: Implement Add, Edit, and Scoped Listing for ESP32 devices in Server/server.js.
+Requirements:
+1. Update GET /api/devices with role-based filtering.
+2. Update POST /api/devices, PUT /api/devices/:mac, and DELETE /api/devices/:mac.
+3. Automatically record DeviceActivityEvents on every configuration change.
+```
+
+---
+
+### 🔹 Prompt 3: Targeted Broadcast & Anonymous Caller ID (#31#)
+```
+Task: Implement Targeted Outbound Calling and Anonymous Cloaked Calling in Calls Page and Dispatcher.
+Requirements:
+1. In the Broadcast Modal, provide routing options:
+   - Auto-Balance Across Cluster
+   - Specific Physical Hardware MAC (from devices list)
+   - Specific Virtual Device ID (from virtualDevices list)
+2. Add an Anonymous / Cloaked Caller ID toggle:
+   - When checked, enforce GSM private CLI flag (#31# prefix) in dial sequence (ATD#31#017XXXXXXXX;).
+   - Generate or accept a custom cloak identifier (e.g. ANON-CLOAK-8812) to mask agent identity in logs.
+3. Support recipient input with optional contact names (+88017XXXXXXXX, Name).
+```
+
+---
+
+### 🔹 Prompt 4: Virtual Device Dedicated Addresses & Talk Time Tracking
+```
+Task: Implement Dedicated Virtual Addresses and Talk Duration Tracking for Virtual Devices.
+Requirements:
+1. Ensure each VirtualDevice model possesses:
+   - virtualMac (unique virtual address, e.g. V-MAC:FF:EE:DD:01, VIR:VIP:02).
+   - totalCallDurationSeconds (cumulative seconds of talk time).
+   - lastCallDurationSeconds (duration of most recent call).
+   - totalCallCount and totalSmsCount.
+2. On the Virtual Devices page (/devices/virtual):
+   - Display formatted talk time (e.g. "3m 20s") on each card.
+   - Provide a 1-click address copy button.
+   - Provide a direct "Test Call" button with a modal pre-filled with this virtual address.
+3. Whenever a call routed through a virtual ID terminates, automatically update its totalCallDurationSeconds.
+```
+
+---
+
+### 🔹 Prompt 5: Telco Carrier Signaling & Accurate Feedback States
+```
+Task: Implement Accurate Carrier Feedback Detection for all Voice Calls.
+Requirements:
+1. Parse SIM800L unsolicited response codes and telco signaling into distinct states:
+   - 'success': Answered and audio prompt played.
+   - 'rejected': User Determined User Busy (UDUB / Release Cause 17).
+   - 'call_waiting': Call Waiting (CW) active on recipient line.
+   - 'forwarded': Diverted to voicemail or forward number.
+   - 'busy': Line engaged.
+   - 'unreachable' / 'number_off': Switched off or out of coverage.
+2. Render distinct color badges for each carrier state in the calls table.
+3. Add a "Details" inspector modal displaying exact minutes/seconds, retry count, audio track, requester identity, and raw AT command trace.
+```
+
+---
+
+### 🔹 Prompt 6: Zero-Drop Priority FIFO Queue under High Load
+```
+Task: Implement a Resilient Priority Queue Buffer to Prevent Request Failure under Heavy Server/Modem Load.
+Requirements:
+1. When all modems are busy or system concurrency is maxed out, place new requests into a FIFO buffer with status: 'queued' and an assigned queuePosition.
+2. As modems become idle, automatically dequeue the oldest request.
+3. If a call returns busy or call waiting, automatically retry with backoff up to 3 times before final marking.
+4. Display active queue position and zero-drop status in the UI.
+```
+
+---
+
+### 🔹 Prompt 7: Call Management & Comprehensive Report Generator
+```
+Task: Build a Call Report & Analytics Generator with Date-to-Date Filtering and CSV Export.
+Requirements:
+1. In Calls Page (/calls), add a "Call Report & Analytics" button.
+2. Modal calculates:
+   - Total dispatches and completed calls with Answer Rate %.
+   - Cumulative talk time in minutes and seconds across the fleet.
+   - Average call duration.
+   - Carrier signaling failure breakdown (Rejection UDUB %, Call Waiting %, Forwarded %, Busy %).
+   - Virtual device talk duration summary table.
+3. Add a 1-click "Download CSV Report" button generating an audit-ready spreadsheet.
+```
+
+---
+
+### 🔹 Prompt 8: Per-Device Chronological Activity & Change History
+```
+Task: Implement Full Activity History for Every Physical and Virtual Modem.
+Requirements:
+1. In the device detail view (/devices/[mac]), render a chronological audit timeline.
+2. Record every call dispatched, SMS sent/received, configuration modified, and reboot event.
+3. Display actor identity (User Name, ID, Role) for every action ("Who did what and what changed").
+```
+
+---
+
+### 🔹 Prompt 9: Voice & SMS Campaign Orchestrator with Scheduling
+```
+Task: Implement Automated Campaign Dispatcher with Calendar Scheduling and Virtual Device Support.
+Requirements:
+1. Under /campaigns, support Voice Broadcast, Bulk SMS (Bengali UCS2), and Smart Hybrid (Voice with SMS fallback).
+2. Allow scheduling campaign launch for a future date/time (scheduledAt).
+3. Allow binding campaigns to Virtual Devices / Cluster Pools with automated failover.
+4. Support anti-spam throttling delay (2s to 20s) and retry policies.
+```

@@ -1,0 +1,313 @@
+# SIM800L ESP32 Calling Server - Technical System Documentation
+
+## 1. System Architecture
+
+```
++---------------------------------------------------------------------------------------------------+
+|                                      CLIENT APPLICATIONS                                          |
+|   +------------------------------------+             +----------------------------------------+   |
+|   |    Next.js 16 Web Dashboard (SPA)   |             |       Legacy HTML5 / Mobile Portal     |   |
+|   |  - Real-time Fleet Telemetry (Vitals)|            |  - Responsive Bootstrap Dashboard     |   |
+|   |  - Targeted & Anonymous Broadcasts |             |  - Quick USSD & Manual Dial Trigger    |   |
+|   |  - Virtual Device Gateway Manager  |             |  - Basic SMS & Call Log View           |   |
+|   |  - Zero-Drop Priority FIFO Queue   |             +----------------------------------------+   |
+|   |  - Voice & SMS Campaign Engine     |                                                          |
+|   |  - Carrier Signaling & Feedback    |                                                          |
+|   |  - Date-to-Date CSV & PDF Report Exporter|                                                          |
+|   |  - Dark & Light Mode Theme Switcher|                                                          |
+|   |  - 1-Click Copy for MACs, Numbers & IDs|                                                          |
+|   +-----------------+------------------+                                                          |
++---------------------|-----------------------------------------------------------------------------+
+                      | HTTP REST / WebSocket (JWT Auth & Socket.IO Rooms)
+                      v
++---------------------------------------------------------------------------------------------------+
+|                             CENTRAL SERVER (Node.js / Express 4 / Socket.IO)                      |
+|  - Auth & RBAC Middleware (JWT Bearer, bcryptjs, Admin / Moderator / Manager / User)             |
+|  - Load Balancer & Dispatch Engine (Auto-distribute, Specific MAC route, Virtual Gateway route)   |
+|  - Zero-Drop FIFO Priority Queue Worker (Buffer on high load, 3x backoff auto-retry)              |
+|  - Telco Carrier Signaling Parser (UDUB Rejected, Call Waiting, Forwarded, Busy, Connected)       |
+|  - Virtual Device Talk Time Tracker (Cumulative seconds, calls handled, SMS dispatched)           |
+|  - Device Activity Audit Logger (Real-time tracking of who changed what on every device)         |
++---------------------------------------------------------------------------------------------------+
+                      |                                                     |
+                      | Mongoose ODM                                        | Socket.IO / HTTP Endpoints
+                      v                                                     v
++---------------------------------------------------+      +----------------------------------------+
+|             DATABASE (MongoDB Atlas)              |      |       ESP32 HARDWARE NODES (SIM800L)   |
+|  - Users (Credentials, Roles, Assigned Devices)   |      |  - SIM800L 2G/GPRS Cellular Modem      |
+|  - DeviceProfiles (MAC, Name, Groups, Allowed)    |      |  - DFPlayer Mini (Audio Track Prompts) |
+|  - VirtualDevices (Virtual MACs, Talk Time Stats) |      |  - Auto-Failover Dual-Host Socket.IO   |
+|  - EspJobs (Queue, Carrier Feedback, Attempts)    |      |  - Local Captive Portal & AP Fallback  |
+|  - Campaigns (Voice, SMS, Hybrid, Scheduled)      |      |  - Live Mic / Browser WebRTC Audio Hook|
+|  - SMS Messages (Inbound, Outbound, UCS2 Bengali) |      +----------------------------------------+
+|  - DeviceEvents (Audit Trail & Activity History)  |
+|  - BlockedNumbers (Blacklist & Auto-Reject Rules) |
++---------------------------------------------------+
+```
+
+---
+
+## 2. Database Models & Schemas
+
+### 2.1 User Schema (`users`)
+```javascript
+const userSchema = new mongoose.Schema({
+    username: { type: String, required: true, unique: true, trim: true },
+    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    password: { type: String, required: true }, // bcrypt hashed
+    role: { type: String, enum: ['admin', 'manager', 'moderator', 'user'], default: 'user' },
+    assignedDevices: [{ type: String }], // Array of physical MAC addresses
+    status: { type: String, enum: ['active', 'disabled'], default: 'active' },
+    createdAt: { type: Date, default: Date.now },
+    lastLogin: { type: Date }
+});
+```
+
+### 2.2 Device Profile Schema (`deviceprofiles`)
+```javascript
+const deviceProfileSchema = new mongoose.Schema({
+    mac: { type: String, required: true, unique: true, uppercase: true, trim: true },
+    name: { type: String, default: 'Unnamed SIM800L Node' },
+    group: { type: String, default: 'Uncategorized' },
+    ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    allowedUsers: [{ type: String }], // Allowed emails or user IDs
+    simNumber: { type: String, default: 'Unknown' },
+    operator: { type: String, default: '' },
+    isOnline: { type: Boolean, default: false },
+    lastSeen: { type: Date },
+    registeredAt: { type: Date, default: Date.now }
+});
+```
+
+### 2.3 Virtual Device Schema (`virtualdevices`)
+```javascript
+const virtualDeviceSchema = new mongoose.Schema({
+    id: { type: String, required: true, unique: true },
+    name: { type: String, required: true },
+    virtualMac: { type: String, required: true, unique: true }, // e.g. "V-MAC:FF:EE:DD:01", "VIR:VIP:02"
+    type: { type: String, enum: ['aggregated-pool', 'failover-pair', 'simulated-modem'], default: 'aggregated-pool' },
+    boundPhysicalMacs: [{ type: String }], // Array of physical MACs bonded to this virtual address
+    activeMac: { type: String }, // Current active hardware transmitter
+    status: { type: String, enum: ['active', 'idle', 'degraded'], default: 'active' },
+    description: { type: String },
+    // Talk time & usage tracking per virtual address
+    totalCallDurationSeconds: { type: Number, default: 0 },
+    lastCallDurationSeconds: { type: Number, default: 0 },
+    totalCallCount: { type: Number, default: 0 },
+    totalSmsCount: { type: Number, default: 0 },
+    lastActive: { type: Date, default: Date.now },
+    createdAt: { type: Date, default: Date.now }
+});
+```
+
+### 2.4 Call Job Schema (`espjobs`)
+```javascript
+const espJobSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    userName: { type: String }, // Requester display name
+    userRole: { type: String }, // Requester role ('admin', 'manager', 'moderator', etc.)
+    isAnonymous: { type: Boolean, default: false }, // Enforces #31# private CLI and masks identity
+    anonymousId: { type: String }, // e.g. "ANON-CLOAK-8812"
+    mac: { type: String, required: false }, // Physical MAC (null if auto-pool)
+    virtualId: { type: String, required: false }, // Virtual Address ID (e.g. VIR:CLUST:01)
+    phone: { type: String, required: true }, // Recipient phone number
+    targetName: { type: String }, // Recipient contact name
+    audio: { type: String, default: null }, // DFPlayer Mini Track ID (e.g. "0001", "0002")
+    status: { 
+        type: String, 
+        enum: [
+            'pending', 'queued', 'calling', 'success', 'received', 
+            'busy', 'rejected', 'call_waiting', 'forwarded', 
+            'number_off', 'unreachable', 'hardware_error', 'fail', 'failed'
+        ], 
+        default: 'pending' 
+    },
+    durationSeconds: { type: Number, default: 0 }, // Exact talk time in seconds
+    feedbackDetails: { type: String }, // Detailed carrier signaling trace
+    queuePosition: { type: Number, default: 0 }, // Zero-drop FIFO queue position under high load
+    attempts: { type: Number, default: 0 }, // Auto-retry count (up to 3x backoff)
+    createdAt: { type: Date, default: Date.now },
+    completedAt: { type: Date }
+});
+```
+
+### 2.5 Campaign Schema (`campaigns`)
+```javascript
+const campaignSchema = new mongoose.Schema({
+    name: { type: String, required: true },
+    type: { type: String, enum: ['voice', 'sms', 'hybrid'], required: true },
+    status: { type: String, enum: ['draft', 'scheduled', 'running', 'paused', 'completed'], default: 'draft' },
+    assignedDevices: [{ type: String }], // Can include physical MACs or Virtual Devices
+    audioTrack: { type: String },
+    audioName: { type: String },
+    smsMessage: { type: String },
+    fallbackSmsMessage: { type: String }, // Hybrid fallback message if call unanswered
+    throttleDelaySec: { type: Number, default: 5 }, // Anti-spam delay between calls
+    retryLimit: { type: Number, default: 1 },
+    scheduledAt: { type: Date }, // Automated future launch timestamp
+    recipients: [{
+        phone: { type: String, required: true },
+        name: { type: String },
+        status: { type: String, enum: ['pending', 'queued', 'calling', 'success', 'failed', 'fallback_sent'], default: 'pending' },
+        callDuration: { type: Number, default: 0 },
+        dispatchedAt: { type: Date }
+    }],
+    totalRecipients: { type: Number, default: 0 },
+    completedCount: { type: Number, default: 0 },
+    successCount: { type: Number, default: 0 },
+    failedCount: { type: Number, default: 0 },
+    createdAt: { type: Date, default: Date.now }
+});
+```
+
+### 2.6 Device Activity Audit Event Schema (`deviceevents`)
+```javascript
+const deviceEventSchema = new mongoose.Schema({
+    deviceId: { type: String, required: true }, // Physical MAC or Virtual Address
+    type: { type: String, enum: ['call_initiated', 'call_completed', 'sms_sent', 'sms_received', 'config_changed', 'reboot', 'status_changed', 'member_assigned', 'member_removed', 'bridge_created'] },
+    actor: {
+        userId: { type: String, required: true },
+        userName: { type: String, required: true },
+        userRole: { type: String, required: true }
+    },
+    summary: { type: String, required: true },
+    details: { type: mongoose.Schema.Types.Mixed },
+    timestamp: { type: Date, default: Date.now }
+});
+```
+
+---
+
+## 3. REST API Specifications
+
+### 3.1 Authentication Endpoints (`/api/auth`)
+- `POST /api/auth/signup`
+  - **Payload**: `{ "username": "sarwar", "email": "admin@sim800l.local", "password": "...", "role": "admin" }`
+  - **Response**: `{ "success": true, "token": "jwt...", "user": { ... } }`
+- `POST /api/auth/login`
+  - **Payload**: `{ "email": "admin@sim800l.local", "password": "..." }`
+  - **Response**: `{ "success": true, "token": "jwt...", "user": { ... } }`
+- `GET /api/auth/me`
+  - **Headers**: `Authorization: Bearer <jwt_token>`
+  - **Response**: Current authenticated user profile with assigned hardware permissions.
+
+### 3.2 Device & Fleet Endpoints (`/api/devices`)
+- `GET /api/devices`: List all registered physical modems (admin sees all; users see assigned).
+- `POST /api/devices`: Register new hardware MAC with name, group, and allowed users.
+- `PUT /api/devices/:mac`: Edit hardware profile metadata.
+- `DELETE /api/devices/:mac`: Unbind/delete hardware profile.
+- `GET /api/devices/:mac/events`: Detailed activity audit trail of who made changes, dispatched calls, or edited settings.
+
+### 3.3 Call Dispatch, Routing & Queue Endpoints (`/api/broadcast`, `/api/jobs`)
+- `POST /api/broadcast`:
+  - **Payload**:
+    ```json
+    {
+      "phone_call_list": ["+8801711111111", "+8801722222222"],
+      "mac": "44:1D:64:BD:22:EC",         // Optional specific hardware MAC
+      "virtualId": "VIR:CLUST:01",         // Optional specific virtual gateway
+      "isAnonymous": true,                 // Optional #31# private CLI cloak
+      "anonymousId": "ANON-CLOAK-8812",    // Optional cloak identifier
+      "audio": "0001",                     // DFPlayer Mini audio track number
+      "recipientNames": { "+8801711111111": "Sakib" }
+    }
+    ```
+- `GET /api/jobs`: Filterable call jobs list by date range, route, status, and requester.
+- `GET /api/jobs/report`: Generates aggregated performance report (total talk minutes, answer rate %, carrier feedback breakdown).
+
+### 3.4 SMS Messaging (`/api/sms`)
+- `GET /api/sms`: Fetch inbound/outbound SMS with search and device filtering.
+- `POST /api/sms`: Send outbound SMS or receive inbound webhook from SIM800L.
+
+---
+
+## 4. Socket.IO Real-Time Event Protocol
+
+### 4.1 Client Commands
+| Event | Direction | Payload | Description |
+| :--- | :--- | :--- | :--- |
+| `dashboard_cmd_dial` | Client -> Server | `{ mac, phone, audio, isAnonymous }` | Direct manual voice dial with optional #31# |
+| `dashboard_cmd_hangup` | Client -> Server | `{ mac }` | Terminates active call immediately |
+| `dashboard_cmd_ussd` | Client -> Server | `{ mac, code }` | Executes USSD balance inquiry (e.g. `*566#`) |
+| `dashboard_send_sms` | Client -> Server | `{ mac, phone, message }` | Dispatches outbound SMS via SIM800L |
+| `dashboard_cmd_reboot` | Client -> Server | `{ mac }` | Initiates hardware MCU reset |
+| `dashboard_cmd_flightmode` | Client -> Server | `{ mac, state }` | Toggles SIM800L airplane mode (`AT+CFUN`) |
+
+### 4.2 Hardware Socket Communication (ESP32 <-> Server)
+- **`esp32_register`**: Sent on hardware boot with `{ "mac": "44:1D:64:BD:22:EC", "ip": "192.168.1.105" }`.
+- **`esp32_telemetry`**: Emitted every 10s with `{ mac, wifi_rssi, sim_signal, sim_operator, sim_number, is_calling }`.
+- **`execute_call`**: Server directs ESP32 to dial `{ job_id, phone_to_call, audio }`.
+- **`call_result`**: ESP32 reports execution outcome `{ job_id, status: 'success' | 'busy' | 'rejected' | 'call_waiting' | 'forwarded' | 'unreachable', duration_seconds: 45 }`.
+
+---
+
+## 5. Carrier Signaling Feedback Standards
+The system parses native SIM800L unsolicited response codes and call progress indicators into accurate telco states:
+1. **`success` / `received`**: Call answered, audio prompt played, exact talk duration recorded.
+2. **`rejected` (UDUB)**: User Determined User Busy (Release Cause 17) — actively declined on subscriber handset.
+3. **`call_waiting` (CW)**: Subscriber handset is on another call with Call Waiting active.
+4. **`forwarded`**: Diverted to voicemail or carrier auto-divert system.
+5. **`busy`**: Network engaged / busy tone.
+6. **`unreachable` / `number_off`**: Subscriber terminal switched off or out of coverage.
+
+---
+
+## 6. Zero-Drop Priority FIFO Queue Architecture
+Under high channel or server load:
+- Calls exceeding immediate modem concurrency are queued in persistent FIFO order (`status: 'queued'`) with an assigned `queuePosition`.
+- As physical or virtual channels become idle, the queue processor pops the oldest job.
+- If a dialed call encounters carrier busy or waiting, an exponential backoff auto-retry worker reschedules it up to 3 attempts, guaranteeing **Zero Request Loss**.
+
+---
+
+## 7. Administrator Full CRUD & Lifecycle Governance
+The platform provides the Super Administrator with absolute, unconstrained CRUD (Create, Read, Update, Delete) governance across every single domain and page in the platform:
+
+| Domain / Resource | Page URL | Admin Create / Add | Admin Read / View | Admin Update / Edit | Admin Delete / Purge |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Physical Hardware Modems** | `/devices` | Register MAC, IP, SIM | Real-time vitals, RSSI, Battery | Edit Name, Group, SIM, Operator | Delete / Unbind hardware |
+| **Virtual GSM Modems** | `/devices/virtual` | Create Virtual Gateway | Virtual MAC, Talk Time, Stats | Edit Name, Arch, Status, Reset Stats | Delete Virtual Gateway |
+| **Modem Groups & Bridges** | `/devices/groups` | Create Dispatch Group | Member nodes, Balance mode | Edit Name, Strategy, Bound MACs | Dissolve Group, Remove Bridge |
+| **Voice Call Records** | `/calls` | Dispatched via UI/API | Full call log, carrier status | Edit recipient, duration, status, trace | Delete single, bulk filtered, clear all |
+| **Inbound Call History** | `/calls/incoming` | Inbound auto-logged | Caller number, receiving node | Callback dispatch | Delete single, clear all logs |
+| **SMS Conversations** | `/sms` | Outbound single & bulk | Threaded chat view | Resend / reply | Delete message, clear thread, wipe all |
+| **Audio Prompt Tracks** | `/audio` | Upload / register track | Track library, duration, size | Edit title, category, description | Delete audio track |
+| **Blocked Caller Blacklist** | `/calls/blocked` | Add number to blacklist | Auto-reject rule, timestamp | Edit label, reason, auto-reject rule | Remove / delete blocked rule |
+| **Call & SMS Campaigns** | `/campaigns` | Create Voice/SMS/Hybrid | Progress bar, metrics, logs | Edit throttle, retries, audio, SMS | Pause, resume, delete campaign |
+| **Quality Complaints** | `/calls/feedback` | Submit feedback ticket | Rating, category, remarks | Update status (Open/Investigating/Resolved) | Delete complaint ticket |
+| **Device Activity Events** | `/devices/[mac]` | Auto-logged on actions | Timeline of who changed what | Filter by type & actor | Delete single event, clear all history |
+| **Operator User Accounts** | `/users` | Create user account | Role, assigned modems, logins | Edit name, email, role, modems, status | Suspend, activate, delete user |
+| **Security Audit Logs** | `/users/logs` | Auto-logged on actions | Forensics, IP, timestamp | Filter by action & keyword | Delete single log, clear audit trail |
+
+---
+
+## 8. Role-Based Access Control (RBAC) Matrix
+1. **Admin (Root)**: Full unconstrained CRUD access to all devices, virtual gateways, call records, SMS, campaigns, user management, and security audit logs.
+2. **Manager**: Full access to dialer, broadcast queue, campaigns, modem groups, and reports. Cannot modify user accounts or wipe security audit logs.
+3. **Moderator**: Access to manual dialing, SMS replies, and feedback ticketing. Cannot modify system groupings or delete hardware modems.
+4. **Viewer**: Read-only monitoring of fleet telemetry, call queue status, and performance metrics. Cannot initiate calls or delete records.
+
+---
+
+## 9. Universal Date-to-Date Filtering & Multi-Format (CSV & PDF) Export
+The platform features an enterprise audit report system across Voice Calls (`/calls`), Inbound Calls (`/calls/incoming`), and SMS Records (`/sms`):
+- **Date-to-Date Picker**: Filter records accurately by `From:` and `To:` date and time.
+- **Quick Preset Ranges**: Instant 1-click presets for `Today`, `Last 7 Days`, `Last 30 Days`, and `All Time`.
+- **Vector PDF Exporter**: Integrated print engine (`pdfExport.ts`) outputting vector-sharp PDF reports with executive KPI summaries, carrier status distribution, talk duration tallies, and Bengali UCS2 SMS decoding.
+- **Direct CSV Download**: High-speed tabular CSV exports respecting active date and search filters.
+
+---
+
+## 10. Universal 1-Click Copy Engine (`ClickToCopy`)
+Click-to-copy functionality is deployed across all 20 views:
+- **Physical & Virtual MAC Addresses**: Click on any MAC (`24:6F:28:XX:XX:XX` or `VIR:AUTO:01`) to copy instantly to clipboard with green checkmark confirmation.
+- **Mobile Phone Numbers**: Click on any target phone number, caller ID, or forward destination to copy without manual selection.
+- **Job IDs & System Identifiers**: 1-click copy for queue job IDs, campaign IDs, and anonymous cloak IDs.
+
+---
+
+## 11. Enterprise Light/Dark Theme Engine & High-Contrast Typography
+- **Instant Toggle**: Header Navbar and Sidebar sun/moon buttons switch seamlessly between clean enterprise Light Mode and high-contrast Dark Mode (`[data-theme="dark"]`).
+- **High-Contrast Dark Mode Overhaul**: Custom CSS overrides eliminate washed-out text (`text-base-content/40` - `/60`), elevating them to crisp, WCAG AAA compliant slate shades (`#cbd5e1` and `#94a3b8`).
+- **Surface Contrast**: Solid dark card backgrounds (`#151d2c`), deep canvas (`#0b0f19`), high-contrast table headers, white input text (`#f8fafc`), and distinct badge borders.
+- **Hydration Safe**: Suppressed hydration attributes and pre-hydration head scripts eliminate UI flash.

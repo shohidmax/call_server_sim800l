@@ -1,0 +1,146 @@
+@import "tailwindcss";
+@plugin "daisyui";
+
+:root, [data-theme="light"] {
+  color-scheme: light;
+  --background: #f8fafc;
+  --foreground: #0f172a;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #0b0f19;
+  --foreground: #f1f5f9;
+
+  /* Custom high-contrast enterprise dark palette */
+  --color-base-100: #151d2c;
+  --color-base-200: #0b0f19;
+  --color-base-300: #1f293d;
+  --color-base-content: #f8fafc;
+
+  --color-neutral: #283348;
+  --color-neutral-content: #f8fafc;
+
+  --color-primary: #38bdf8;
+  --color-primary-content: #082f49;
+
+  --color-secondary: #c084fc;
+  --color-secondary-content: #3b0764;
+
+  --color-accent: #2dd4bf;
+  --color-accent-content: #042f2e;
+
+  --color-success: #34d399;
+  --color-success-content: #064e3b;
+
+  --color-warning: #fbbf24;
+  --color-warning-content: #451a03;
+
+  --color-error: #f87171;
+  --color-error-content: #450a0a;
+}
+
+body {
+  min-height: 100vh;
+}
+
+/* ==========================================================================
+   Dark Mode High-Contrast Visibility Optimizations
+   ========================================================================== */
+
+/* 1. Muted & Secondary Text Labels */
+[data-theme="dark"] .text-base-content\/30,
+[data-theme="dark"] .text-base-content\/40,
+[data-theme="dark"] .text-base-content\/50 {
+  color: #94a3b8 !important; /* High-contrast crisp slate-400 */
+}
+
+[data-theme="dark"] .text-base-content\/60,
+[data-theme="dark"] .text-base-content\/70 {
+  color: #cbd5e1 !important; /* Crisp slate-300 */
+}
+
+[data-theme="dark"] .text-base-content\/80 {
+  color: #f1f5f9 !important; /* Crisp slate-100 */
+}
+
+/* 2. Form Inputs, Selects, and Textareas */
+[data-theme="dark"] .input,
+[data-theme="dark"] .select,
+[data-theme="dark"] .textarea {
+  color: #f8fafc !important;
+  background-color: #1a2232 !important;
+  border-color: #334155 !important;
+}
+
+[data-theme="dark"] select option {
+  background-color: #151d2c !important;
+  color: #f8fafc !important;
+}
+
+[data-theme="dark"] .input::placeholder,
+[data-theme="dark"] .textarea::placeholder,
+[data-theme="dark"] input::placeholder,
+[data-theme="dark"] textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+/* 3. Date picker inputs & native browser controls */
+[data-theme="dark"] input[type="date"] {
+  color-scheme: dark !important;
+  color: #f8fafc !important;
+}
+
+/* 4. Table Headers & Rows */
+[data-theme="dark"] th {
+  color: #cbd5e1 !important;
+  background-color: #151d2c !important;
+}
+
+[data-theme="dark"] tr:hover,
+[data-theme="dark"] tr.hover\:bg-base-200\/40:hover,
+[data-theme="dark"] .hover\:bg-base-200\/40:hover,
+[data-theme="dark"] .hover\:bg-base-200:hover {
+  background-color: rgba(36, 47, 68, 0.7) !important;
+}
+
+/* 5. Sub-containers and nested surfaces */
+[data-theme="dark"] .bg-base-200\/40,
+[data-theme="dark"] .bg-base-200\/50,
+[data-theme="dark"] .bg-base-200\/60 {
+  background-color: rgba(26, 34, 50, 0.85) !important;
+  border-color: #2b384e !important;
+}
+
+/* 6. Borders & Dividers */
+[data-theme="dark"] .border-base-200,
+[data-theme="dark"] .border-base-300 {
+  border-color: #283348 !important;
+}
+
+[data-theme="dark"] .divide-base-200 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #283348 !important;
+}
+
+/* 7. Badges */
+[data-theme="dark"] .badge-outline {
+  border-color: #475569 !important;
+  color: #e2e8f0 !important;
+}
+
+[data-theme="dark"] .badge-ghost {
+  background-color: #283348 !important;
+  color: #f8fafc !important;
+}
+
+[data-theme="dark"] .badge-neutral {
+  background-color: #283348 !important;
+  color: #f8fafc !important;
+}
+
+/* 8. ClickToCopy copy icon visibility in Dark Mode */
+[data-theme="dark"] .group .opacity-30,
+[data-theme="dark"] .opacity-30 {
+  opacity: 0.6 !important;
+  color: #cbd5e1 !important;
+}

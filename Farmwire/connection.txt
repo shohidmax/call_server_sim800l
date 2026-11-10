@@ -1,0 +1,56 @@
+================================================================================
+       ESP32 + SIM800L + DFPLAYER MINI + LIVE AUDIO PIN CONNECTION GUIDE
+================================================================================
+
+1. ESP32 to SIM800L (Serial AT Commands & Power)
+--------------------------------------------------------------------------------
+ESP32 Pin                SIM800L Pin             Description
+--------------------------------------------------------------------------------
+GPIO 16 (RX2)    <---->  TXD                     Serial communication (ESP32 receives)
+GPIO 17 (TX2)    <---->  RXD (via Voltage Div)*  Serial communication (ESP32 transmits)
+GND              <---->  GND                     Common Ground (MANDATORY)
+External 4.2V 2A <---->  VCC / 5V                Power Supply (Peak 2A required for GSM)
+
+* Note: SIM800L RXD pin operates at 2.8V-3.3V logic level. Use a 1k:2k resistor 
+  divider or 3.3V level shifter from ESP32 TX2 (3.3V) if using 5V modules.
+
+
+2. ESP32 to DFPlayer Mini (Pre-recorded Audio Prompt Player)
+--------------------------------------------------------------------------------
+ESP32 Pin                DFPlayer Pin            Description
+--------------------------------------------------------------------------------
+GPIO 14 (RX1)    <---->  TX                      ESP32 receives status from DFPlayer
+GPIO 27 (TX1)    <---->  RX (via 1k resistor)    ESP32 sends playback commands
+5V / 3.3V        <---->  VCC                     Power supply for DFPlayer
+GND              <---->  GND                     Common Ground
+DFPlayer SPK1/2  <---->  Speaker / SIM800L MIC   Audio output for voice broadcasts
+
+
+3. LIVE TWO-WAY AUDIO BRIDGE (Browser Microphone <--> SIM800L GSM Call)
+--------------------------------------------------------------------------------
+ব্রাউজার থেকে সরাসরি লাইভ মাইক ও স্পিকার দিয়ে জিএসএম কলের জন্য এনালগ অডিও সংযোগ:
+
+A. Browser Microphone -> Outgoing to GSM Call (আপনার মুখের কথা অপর প্রান্তে যাওয়া):
+--------------------------------------------------------------------------------
+ESP32 / DAC Source       SIM800L Pin             Description & Filtering
+--------------------------------------------------------------------------------
+ESP32 GPIO 25 (DAC1) বা  MICP (Positive)         100nF (0.1uF) ডিসি ব্লকিং ক্যাপাসিটর
+I2S DAC (MAX98357A)                             এর মাধ্যমে যুক্ত করুন।
+GND / Audio Ground <---> MICN (Negative)         সরাসরি গ্রাউন্ড বা ডিফারেন্সিয়াল নেগেটিভ।
+
+B. GSM Call -> Incoming to Browser Speaker (অপর প্রান্তের কথা আপনার হেডফোনে শোনা):
+--------------------------------------------------------------------------------
+SIM800L Pin              ESP32 / ADC Input       Description & Filtering
+--------------------------------------------------------------------------------
+SPKP (Speaker Out +) <-> ESP32 GPIO 34 (ADC1) বা 100nF ক্যাপাসিটর ও ভোল্টেজ ডিভাইডার
+                         I2S ADC (INMP441/PCM)   (SIM800L স্পিকার সিগন্যাল 3.3V এ নামানো)
+SPKN (Speaker Out -) <-> GND (Common Ground)     কমন গ্রাউন্ড।
+
+
+4. ESP32 STATUS LED INDICATOR
+--------------------------------------------------------------------------------
+ESP32 Pin                Component               Description
+--------------------------------------------------------------------------------
+GPIO 2                   Built-in Blue LED       Blinks when waiting/idle; steady when active.
+================================================================================
+

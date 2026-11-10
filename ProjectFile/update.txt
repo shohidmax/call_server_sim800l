@@ -1,0 +1,121 @@
+# SIM800L ESP32 Platform - Project Update & Transition Guide (`update.txt`)
+
+## 📌 Update Objectives & Milestones
+Transform the platform from an open single-operator tool into an enterprise-ready, multi-tenant telecommunication platform with:
+1. User Authentication & RBAC (Admin, Manager, Moderator, User).
+2. Modern Next.js 16 Fullstack Dashboard (100% English, Mobile-Responsive).
+3. Targeted Voice Broadcasts (Specific MAC, Virtual IDs, Anonymous #31# Cloak).
+4. Virtual Device Dedicated Addresses & Cumulative Talk Duration Tracking.
+5. Accurate Telco Carrier Signaling Feedback (UDUB Rejected, Call Waiting, Forwarded, Busy, Connected).
+6. Zero-Drop Priority FIFO Queue under Heavy Server Load (Automatic 3x Backoff Retry).
+7. Comprehensive Call Management & Date-to-Date CSV Report Generator.
+8. Automated Call & SMS Campaign Engine with Calendar Scheduling.
+9. Granular Device Activity Audit History ("Who did what, when, and what changed").
+
+---
+
+## 📦 1. Dependencies Installed
+### Server (`Server/package.json`)
+```bash
+npm install bcryptjs jsonwebtoken cors dotenv express mongoose socket.io
+```
+
+### Frontend (`web/package.json`)
+```bash
+npx create-next-app@latest (Next.js 16, React 19, Tailwind CSS 4, DaisyUI 5, Lucide-React)
+```
+
+---
+
+## ⚙️ 2. Environment Variables Configuration (`Server/.env`)
+```env
+PORT=3000
+MONGO_URI=mongodb+srv://sarwarjahanshohid_db_trans:OXAqtShYSdEIbBXG@transformer.7b8ec5a.mongodb.net/?appName=transformer
+JWT_SECRET=super_secret_jwt_key_sim800l_2026
+JWT_EXPIRES_IN=7d
+```
+
+---
+
+## 📋 3. Master Implementation Checklist
+
+### Backend & Database (`Server/`)
+- [x] **User Authentication & JWT Middleware**:
+  - `POST /api/auth/signup`, `POST /api/auth/login`, `GET /api/auth/me`.
+  - Roles: `admin`, `manager`, `moderator`, `user`.
+- [x] **Extended Mongoose Models**:
+  - `User`: Credentials, roles, assigned devices.
+  - `DeviceProfile`: Physical MAC, labels, groups, allowed users.
+  - `VirtualDevice`: Dedicated virtual address, cumulative talk duration, total calls, total SMS.
+  - `EspJob`: Target phone, contact name, route type, virtual ID, anonymous cloak, duration, carrier feedback, queue position, retry attempts.
+  - `DeviceActivityEvent`: Audit logs of every configuration change and call/SMS event.
+- [x] **Zero-Drop Priority FIFO Queue Engine**:
+  - Buffers excess calls into `queued` state with `queuePosition`.
+  - Automatically pops next job as modems free up.
+  - 3x auto-retry with backoff for busy or waiting lines.
+- [x] **Telco Carrier Signaling Parser**:
+  - Detects `ANSWERED`, `REJECTED` (UDUB Release Cause 17), `CALL_WAITING` (CW), `FORWARDED` (Voicemail), `BUSY`, and `UNREACHABLE`.
+
+### Next.js Frontend (`web/`)
+- [x] **Voice Call Management & Broadcast Queue (`/calls`)**:
+  - Targeted broadcast modal supporting Specific MAC, Virtual Device Address, or Auto-Balance.
+  - Anonymous / Cloaked Caller ID toggle (`#31#` private CLI prefix with `ANON-CLOAK-XXXX` tag).
+  - Recipient phone list supporting `+88017XXXXXXXX, Contact Name`.
+  - Carrier feedback badges: Answered, Rejected (UDUB), Call Waiting, Forwarded, Line Busy, Queued.
+  - Detailed Carrier Telemetry Inspector modal with raw AT trace.
+  - Comprehensive Call Management Report modal with Date-to-Date range filtering, key performance metrics, carrier failure breakdown, virtual line talk summary, and 1-Click CSV download.
+- [x] **Virtual GSM Modems (`/devices/virtual`)**:
+  - Dedicated virtual addresses (`V-MAC:FF:EE:DD:01`) with 1-click clipboard copy.
+  - Cumulative talk time record (`totalCallDurationSeconds` in min/sec) and last call duration.
+  - Direct 1-click "Test Call" modal pre-configured with virtual address.
+- [x] **Call & SMS Campaign Engine (`/campaigns`)**:
+  - Voice Broadcast, Bulk SMS (Bengali UCS2), and Smart Hybrid (Call with SMS fallback).
+  - Calendar Scheduled Campaign Launch (`scheduledAt`).
+  - Virtual Device / Cluster Pool binding with automated failover.
+  - Anti-spam throttling delay (2s to 20s) and retry policies.
+- [x] **Device Activity Audit Trail (`/devices/[mac]`)**:
+  - Per-device chronological history tracking who initiated calls, who modified configs, and when.
+- [x] **Live Audio & Microphone Calling (`/audio`)**:
+  - In-browser WebRTC audio recording and live microphone calling.
+  - DFPlayer Mini audio prompt track manager.
+- [x] **Universal Admin CRUD & Lifecycle Governance (Update & Delete Everywhere)**:
+  - Physical Devices (`/devices`): Add, Edit (Name, Group, SIM, Operator), Share, Delete.
+  - Virtual Devices (`/devices/virtual`): Create, Edit (Name, Type, Status, MACs, Reset stats), Delete.
+  - Device Groups (`/devices/groups`): Create, Edit (Name, Description, Strategy, MACs), Dissolve group.
+  - Voice Call History (`/calls`): Edit call details/trace, Single delete, Bulk filtered delete, Clear all.
+  - Inbound Calls (`/calls/incoming`): Delete record, Clear all incoming call logs.
+  - SMS Messages (`/sms`): Single message delete, Delete full thread, Clear all SMS.
+  - Audio Prompt Tracks (`/audio`): Register track, Edit (Title, Category, Description), Delete track.
+  - Blacklisted Numbers (`/calls/blocked`): Add rule, Edit (Label, Rule, Reason), Delete / Remove rule.
+  - Campaigns (`/campaigns`): Create, Edit (Name, Throttle, Retries, Prompts, Messages), Delete campaign.
+  - Quality Complaints (`/calls/feedback`): Status update (Open/Investigating/Resolved), Delete ticket.
+  - Device History (`/devices/[mac]`): Delete single event, Clear full device activity history.
+  - User Accounts (`/users`): Create user, Edit (Name, Email, Role, Modems, Status), Suspend, Delete user.
+  - Security Audit Logs (`/users/logs`): Delete single log entry, Clear all security audit logs.
+- [x] **Date-to-Date Filtering & Multi-Format (CSV & PDF) Export**:
+  - Voice Call History (`/calls`): Date-to-Date calendar picker (`From:`, `To:`), quick ranges (Today, Last 7 Days, Last 30 Days, All Time), clear dates, 1-Click CSV export, and Vector PDF Report generator.
+  - Call Management Analytics Modal (`/calls`): KPI summary, carrier breakdown, virtual line talk stats, with instant PDF Report & CSV download.
+  - SMS Management (`/sms`): Date-to-Date calendar picker (`From:`, `To:`), quick ranges (Today, Last 7 Days, Last 30 Days, All Time), clear dates, 1-Click CSV export, and Vector PDF Report generator with Bengali UCS2 decoding.
+  - Inbound Calls (`/calls/incoming`): Date-to-Date calendar picker (`From:`, `To:`), quick ranges (Today, Last 7 Days, Last 30 Days, All Time), clear dates, 1-Click CSV export, and Vector PDF Report generator.
+- [x] **Dark Mode & Light Mode Theme Engine**:
+  - Global ThemeProvider with persistent preference stored in `localStorage` (`sim800l_theme`).
+  - Pre-hydration inline script in `<head>` to prevent flash of unstyled content (FOUC).
+  - Responsive toggle controls in both top Navbar and Sidebar footer (`ThemeToggle`).
+  - Auto-detection of system dark mode preference (`prefers-color-scheme: dark`).
+  - Comprehensive Dark Mode High-Contrast Visibility Overhaul (`globals.css`): Fixed washed-out/invisible secondary labels (`text-base-content/40`, `/50`, `/60`), boosted table headers, enhanced inputs/selects/date-pickers, and optimized badge contrast for 100% WCAG AAA readability.
+- [x] **Universal 1-Click Copy for MAC Addresses, Phone Numbers & System IDs**:
+  - Reusable `ClickToCopy` component with instant clipboard copy, fallback support, and animated green checkmark confirmation.
+  - Physical & Virtual MACs: Click to copy on Devices (`/devices`), Virtual Modems (`/devices/virtual`), Controls (`/devices/[mac]`), and Dashboard (`/`).
+  - Phone Numbers: Click to copy on Voice Calls (`/calls`), Inbound Calls (`/calls/incoming`), SMS (`/sms`), Campaigns (`/campaigns`), and Controls (`/devices/[mac]`).
+  - System IDs: Click to copy on Job IDs, Virtual IDs, Campaign IDs, and Anonymous Cloak IDs.
+- [x] **Mobile Responsiveness & Clean English UI**:
+  - 100% English interface across all 20 pages.
+  - Responsive layouts, modals, and tables across all smartphone and tablet viewports.
+
+---
+
+## 🔒 4. Backward Compatibility & System Health
+- **ESP32 Firmware Compatibility**: Maintained 100% backwards compatibility for `esp32_register`, `esp32_telemetry`, `execute_call`, and `call_result`.
+- **Active Runtimes**:
+  - Node.js backend server active on port 3000 (MongoDB Atlas connected).
+  - Next.js 16 production build compiles with exit code 0; dev server active on port 3001.

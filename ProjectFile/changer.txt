@@ -1,0 +1,178 @@
+# SIM800L ESP32 Calling Server - Code Changes & Implementation Blueprint (`changer.txt`)
+
+This file details the code modifications, schemas, routes, and UI components implemented across the platform.
+
+---
+
+## 1. Backend Server Architecture (`Server/`)
+
+### A. Environment Configuration (`Server/.env`)
+```env
+PORT=3000
+MONGO_URI=mongodb+srv://sarwarjahanshohid_db_trans:OXAqtShYSdEIbBXG@transformer.7b8ec5a.mongodb.net/?appName=transformer
+JWT_SECRET=super_secret_jwt_key_sim800l_2026
+JWT_EXPIRES_IN=7d
+```
+
+### B. Extended Mongoose Schemas (`Server/server.js`)
+1. **User Schema**: `username`, `email`, `password` (bcrypt), `role` (`'admin' | 'manager' | 'moderator' | 'user'`), `assignedDevices`, `status`.
+2. **Virtual Device Schema**:
+   ```javascript
+   const virtualDeviceSchema = new mongoose.Schema({
+       id: { type: String, required: true, unique: true },
+       name: { type: String, required: true },
+       virtualMac: { type: String, required: true, unique: true },
+       type: { type: String, enum: ['aggregated-pool', 'failover-pair', 'simulated-modem'] },
+       boundPhysicalMacs: [{ type: String }],
+       activeMac: { type: String },
+       status: { type: String, default: 'active' },
+       totalCallDurationSeconds: { type: Number, default: 0 },
+       lastCallDurationSeconds: { type: Number, default: 0 },
+       totalCallCount: { type: Number, default: 0 },
+       totalSmsCount: { type: Number, default: 0 },
+       lastActive: { type: Date, default: Date.now }
+   });
+   ```
+3. **Call Job Schema (`espjobs`)**:
+   ```javascript
+   const espJobSchema = new mongoose.Schema({
+       userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+       userName: { type: String },
+       userRole: { type: String },
+       isAnonymous: { type: Boolean, default: false },
+       anonymousId: { type: String },
+       mac: { type: String },
+       virtualId: { type: String },
+       phone: { type: String, required: true },
+       targetName: { type: String },
+       audio: { type: String },
+       status: { 
+           type: String, 
+           enum: ['pending', 'queued', 'calling', 'success', 'received', 'busy', 'rejected', 'call_waiting', 'forwarded', 'number_off', 'unreachable', 'hardware_error', 'fail', 'failed'] 
+       },
+       durationSeconds: { type: Number, default: 0 },
+       feedbackDetails: { type: String },
+       queuePosition: { type: Number, default: 0 },
+       attempts: { type: Number, default: 0 },
+       createdAt: { type: Date, default: Date.now },
+       completedAt: { type: Date }
+   });
+   ```
+
+### C. Zero-Drop Priority Queue & Carrier Feedback Worker
+- **Queue Buffering**: When active calls reach hardware concurrency limit, incoming requests are marked `status: 'queued'` and given an incremental `queuePosition`.
+- **FIFO Dispatch**: As channels complete calls, the worker dequeues the lowest `queuePosition`.
+- **Auto-Retry Backoff**: Calls returning `busy` or `call_waiting` are rescheduled up to 3 times before final marking.
+- **Virtual Device Talk Time Accumulation**: Whenever a call on a virtual address completes, `totalCallDurationSeconds` on that virtual device is incremented by the exact call duration.
+
+---
+
+## 2. Next.js Frontend Architecture (`web/`)
+
+### A. Context Engine (`web/src/context/DataContext.tsx`)
+- Provides shared state for `devices`, `virtualDevices`, `callJobs`, `smsMessages`, `audioTracks`, `campaigns`, and `deviceEvents`.
+- Implements `triggerBroadcast`:
+  ```typescript
+  triggerBroadcast: (phoneList: string[], options: {
+      mac?: string;
+      virtualId?: string;
+      isAnonymous?: boolean;
+      anonymousId?: string;
+      audio?: string;
+      recipientNames?: Record<string, string>;
+  }) => Promise<void>;
+  ```
+- Implements `recordDeviceEvent`: Logs all device interactions with `actor`, `summary`, and `details`.
+
+### B. Voice Calls & Broadcast Queue (`web/src/app/calls/page.tsx`)
+- **Broadcast Modal**:
+  - Route selector: Auto-Balance, Specific Physical MAC, or Specific Virtual Device Address.
+  - Anonymous / Cloaked Caller ID toggle (`#31#` prefix and `ANON-CLOAK-XXXX` tag).
+  - Recipient phone list supporting `+88017XXXXXXXX, Name`.
+  - DFPlayer audio prompt track selector.
+- **Calls Table & Carrier Feedback Badges**:
+  - `Answered` (badge-success)
+  - `Call Rejected` (badge-error UDUB)
+  - `Call Waiting` (badge-info CW)
+  - `Forwarded` (badge-secondary voicemail)
+  - `Line Busy` (badge-neutral)
+  - `Queued (High Load)` (badge-warning with Pos #)
+  - Talk Duration (`Xm Ys`), Requester badge, Route badge.
+- **Carrier Telemetry Inspector Modal**:
+  - Shows full AT command trace, exact timestamps, retry attempts, and duration.
+- **Call Management Report & Analytics Modal**:
+  - Date-to-Date range filtering (`startDate` to `endDate`).
+  - Total dispatches, completed calls, Answer Rate %, total talk time in minutes, average call duration.
+  - Carrier feedback failure breakdown.
+  - Virtual device talk duration summary table.
+  - 1-Click CSV report download.
+
+### C. Virtual GSM Modems (`web/src/app/devices/virtual/page.tsx`)
+- Displays unique virtual address (`virtualMac`) with 1-click copy.
+- Displays cumulative talk time (`totalCallDurationSeconds` formatted in minutes/seconds), last call duration, total calls, and total SMS.
+- Includes interactive **Test Call** modal to dispatch calls through that virtual address.
+
+### D. Campaign Orchestrator (`web/src/app/campaigns/page.tsx`)
+- Supports Voice Broadcast, Bulk SMS (Bengali UCS2), and Smart Hybrid (Call with SMS fallback).
+- Scheduled Campaign Launch (`scheduledAt`) for automated execution.
+- Integration with Virtual Devices / Cluster Pools (`VIR:CLUST:01`, `VIR:VIP:02`).
+- Anti-spam delay throttling (2s-20s) and retry policies.
+
+### E. Per-Device Activity History (`web/src/app/devices/[mac]/page.tsx`)
+- Dedicated device view tracking who called whom, what settings were changed, and who made the change.
+
+### F. Complete Admin CRUD Implementation (`web/src/context/DataContext.tsx`)
+- Added full state mutation actions:
+  - `updateDevice`, `deleteDevice`
+  - `updateVirtualDevice`, `deleteVirtualDevice`
+  - `updateGroup`, `deleteGroup`
+  - `updateCallJob`, `deleteCallJob`, `deleteCallJobs`, `clearAllCallJobs`
+  - `deleteIncomingCall`, `clearIncomingCalls`
+  - `deleteSms`, `deleteSmsThread`, `clearAllSms`
+  - `updateAudioTrack`, `deleteAudioTrack`
+  - `updateBlockedNumber`, `removeBlockedNumber`
+  - `updateCampaign`, `deleteCampaign`
+  - `updateComplaintStatus`, `deleteComplaint`
+  - `deleteDeviceEvent`, `clearDeviceEvents`
+  - `deleteBehaviorLog`, `clearBehaviorLogs`
+- Added intuitive Edit modals and Delete confirmation buttons across all pages, strictly gated by `hasPermission('admin')` or `hasPermission('manager')`.
+
+### G. Date-to-Date Range Filtering Engine (`/calls`, `/sms`, `/calls/incoming`)
+- Implemented calendar date-to-date inputs (`startDate` to `endDate`) with timestamp conversion.
+- Added Quick Range Presets:
+  - `Today`
+  - `Last 7 Days`
+  - `Last 30 Days`
+  - `All Time`
+- Added 1-click `Clear Dates` reset and real-time "Showing X of Y" counters.
+- Added 1-click CSV export respecting active date filters.
+
+### H. Multi-Format Vector PDF Exporter (`web/src/utils/pdfExport.ts`)
+- Implemented high-fidelity print report engine with CSS `@media print` rules, A4 landscape/portrait layouts, and executive KPI cards.
+- Integrated PDF export buttons:
+  - `/calls`: "Export PDF" on the main table and "Download PDF Report" in the Call Analytics Modal.
+  - `/sms`: "Export PDF" with full support for Bengali UCS2 Unicode text.
+  - `/calls/incoming`: "Export PDF" for received call audit trails.
+
+### I. Dark & Light Theme Management (`web/src/context/ThemeContext.tsx`, `web/src/components/ThemeToggle.tsx`)
+- Configured Theme Context and DaisyUI 5 dark/light theme switching.
+- Added pre-hydration script in `layout.tsx` to prevent theme flicker on page refresh.
+- Added Sun/Moon interactive toggle buttons in the Top Navbar and Sidebar drawer.
+- Persisted active theme selection in `localStorage` under `sim800l_theme`.
+
+### J. Universal Click-to-Copy Component (`web/src/components/ClickToCopy.tsx`)
+- Built `ClickToCopy` supporting clipboard copying with visual checkmark feedback and clipboard fallback.
+- Integrated across:
+  - Hardware & Virtual MAC addresses (`/devices`, `/devices/virtual`, `/devices/[mac]`, `/`)
+  - Mobile numbers (`/calls`, `/sms`, `/calls/incoming`, `/campaigns`, `/devices/[mac]`, `/`)
+  - Telemetry Job IDs, Campaign IDs, and Anonymous Cloak IDs.
+
+### K. Dark Mode High-Contrast Visibility Overhaul (`web/src/app/globals.css`)
+- Re-architected `[data-theme="dark"]` CSS token palette for crisp, accessible contrast (WCAG AAA compliant):
+  - Primary text `--color-base-content`: `#f8fafc` (pure bright slate-50).
+  - Backgrounds: Main canvas `#0b0f19`, Card surface `#151d2c`, Elevated container `#1f293d`.
+  - Secondary & Muted text: Overrode Tailwind/DaisyUI opacity modifier classes (`text-base-content/40`, `text-base-content/50`, `text-base-content/60`) to solid high-contrast shades (`#94a3b8` and `#cbd5e1`), eliminating all invisible/washed-out text in dark mode.
+  - Inputs & Controls: Styled input fields, select dropdowns, textareas, and date pickers with dark backgrounds (`#1a2232`), clear borders (`#334155`), and pure white text (`#f8fafc`).
+  - Table headers (`th`): Elevated to `#cbd5e1` text with subtle border dividers.
+  - Badges: `badge-outline`, `badge-ghost`, and `badge-neutral` enhanced with `#e2e8f0` text and distinct borders.
+  - Interactive Hover states: Adjusted table row hovers (`rgba(36, 47, 68, 0.7)`) and copy icon hover states for maximum clarity in dark mode without affecting light mode.

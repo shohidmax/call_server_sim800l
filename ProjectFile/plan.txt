@@ -1,0 +1,111 @@
+# Project Evolution & Architecture Master Plan: SIM800L ESP32 Calling Server
+
+## 🎯 Executive Summary
+Transform the ESP32 SIM800L calling & messaging system into a high-concurrency, enterprise-grade telecommunication platform featuring multi-tenant Authentication, Role-Based Access Control, granular Device Audit Trails, targeted Voice Broadcasts (Specific MAC, Virtual IDs, Anonymous #31# Cloak), automated Call & SMS Campaign Scheduling, Zero-Drop Priority Queue Load Balancing, and accurate Telco Carrier Signaling Feedback with 1-Click CSV Reporting.
+
+---
+
+## 🏗️ 1. Authentication, RBAC & User Management
+- **User Hierarchy**:
+  - `Admin`: Full cluster governance, user permissions, device binding, global logs.
+  - `Manager`: Operations oversight, group management, virtual device creation, broadcast approval.
+  - `Moderator`: Broadcast dispatch, campaign launch, blacklist management, complaint resolution.
+  - `User`: Personal dashboard, assigned device dispatch, own call and SMS logs.
+- **Audit Logging**:
+  - User behavior tracking (logins, config changes, broadcast launches, blacklist toggles) recorded under `/users/logs`.
+
+---
+
+## 📟 2. Fleet Management & Detailed Device Activity History
+- **Device Lifecycle**:
+  - Register new ESP32 MAC addresses (`XX:XX:XX:XX:XX:XX`).
+  - Auto-Discovery of unclaimed modems via Socket.IO `esp32_register`.
+  - Edit metadata: Friendly Name, Group/Zone, Operator, Allowed Users list.
+  - Hardware controls: Manual Dial, Hangup, USSD Query, Outbound SMS, Reboot, Flight Mode toggle.
+- **Per-Device History & Change Tracking**:
+  - Clicking any device opens a chronological event timeline recording:
+    - Who initiated each call / SMS.
+    - Exact changes made to device configurations (who changed what, when, and from what role).
+    - Modem uptime, signal drops, and hardware reboot events.
+
+---
+
+## 📞 3. Voice Call Broadcast & Targeted Outbound Routing
+- **Routing Targets**:
+  - **Auto-Balance**: Load balancer distributes numbers across all idle hardware modems.
+  - **Specific Physical MAC**: Directs call requests to execute on an exact hardware modem (`44:1D:64:BD:22:EC`).
+  - **Specific Virtual Device Address**: Directs call requests to a bonded virtual pool (`VIR:CLUST:01`, `VIR:VIP:02`, `V-MAC:FF:EE:DD:01`).
+  - **Anonymous / Cloaked Caller ID**: Dispatches call with GSM private CLI prefix (`#31#`), allocates a cloak ID (`ANON-CLOAK-XXXX`), and masks agent identity across logs.
+- **Recipient Naming**:
+  - Supports input format `+88017XXXXXXXX, Contact Name` for enriched logs and reports.
+- **Audio Prompt Triggering**:
+  - Triggers DFPlayer Mini track numbers (`Track 0001`, `Track 0002`) upon answer.
+  - In-browser microphone recording for real-time audio capture.
+
+---
+
+## 🖧 4. Virtual Device Architecture & Talk Duration Records
+- **Dedicated Virtual Addresses**:
+  - Each virtual device has a unique virtual MAC/Address (`V-MAC:FF:EE:DD:01`) allowing direct targeting from APIs and UI.
+- **Per-Virtual Address Duration Tracking**:
+  - Cumulative talk time accurately aggregated in minutes and seconds (`totalCallDurationSeconds`).
+  - Last call duration recorded (`lastCallDurationSeconds`).
+  - Total call count and total SMS count maintained per virtual address.
+- **Direct Test Calling**:
+  - 1-click test calling modal pre-configured with the selected virtual device.
+
+---
+
+## 📣 5. Call & SMS Campaign Engine (`/campaigns`)
+- **Campaign Types**:
+  - **Voice Broadcast**: Batch dialer with DFPlayer Mini voice prompt playback.
+  - **Bulk SMS**: Bengali UCS2 Unicode message dispatch with real-time multi-part counter.
+  - **Smart Hybrid**: Voice call first; automated fallback SMS dispatched if call is missed or busy.
+- **Advanced Controls**:
+  - **Scheduled Launch**: Date & time picker for automated future campaign execution.
+  - **Virtual Device Integration**: Assign campaigns to bonded virtual device clusters.
+  - **Anti-Spam Throttling**: Configurable delay (2s to 20s) between successive calls.
+  - **Auto-Retry Backoff**: Automatically retry unanswered numbers up to 3 times.
+
+---
+
+## 🛡️ 6. Zero-Drop Priority FIFO Queue & Carrier Feedback Signaling
+- **High-Load Buffer**:
+  - Under peak server or channel load, requests are held securely in a priority FIFO queue (`status: 'queued'`) with an assigned `queuePosition`.
+  - Guaranteed Zero Drop: No request fails due to server saturation.
+- **Carrier Signaling Breakdown**:
+  - `Answered` (`success` / `received`): Talk time duration recorded.
+  - `Call Rejected` (`rejected`): Subscriber actively declined the call (UDUB Release Cause 17).
+  - `Call Waiting` (`call_waiting`): Subscriber handset busy with call waiting enabled.
+  - `Forwarded` (`forwarded`): Diverted to voicemail or secondary number.
+  - `Line Busy` (`busy`): Network engaged tone.
+  - `Unreachable` (`unreachable` / `number_off`): Switched off / out of coverage.
+- **Telemetry Inspector**:
+  - Modal providing deep AT response traces, retry attempts, talk duration, and exact timestamps.
+
+---
+
+## 📊 7. Call Management & Comprehensive Report Generator
+- **Date-to-Date Filtering**:
+  - Filter history by start and end date with quick range presets (Today, 7 Days, 30 Days, All Time).
+- **Consolidated Analytics**:
+  - Total dispatches, completed calls, and Answer Rate %.
+  - Cumulative talk time in minutes across the entire fleet and per virtual device.
+  - Average call duration in seconds.
+  - Carrier failure breakdown (Rejections %, Busy %, Waiting %, Forwarded %).
+- **1-Click CSV Export**:
+  - Exports complete dataset with Job ID, Requester, Role, Anonymous ID, Target Phone, Target Name, Route Type, Node/Virtual ID, Duration, Carrier Feedback, and Timestamps.
+
+---
+
+## 🎙️ 8. In-Browser Live Microphone & Audio Hub
+- Real-time browser audio recording & live microphone calling for direct audio capture and playback.
+- Track manager for DFPlayer Mini SD card prompt tracks.
+
+---
+
+## ⚡ 9. Full Admin CRUD & Lifecycle Governance
+- **Unconstrained Management Power**:
+  - Super Admin (`role: 'admin'`) possesses complete Create, Read, Update, and Delete authority across all 13 core modules.
+  - Interactive Edit Modals for physical devices, virtual gateways, device groups, call records, campaigns, audio tracks, blacklist rules, user profiles, and complaints.
+  - Granular single delete, bulk selected delete, and master wipe controls with confirmation guards.

@@ -1,114 +1,508 @@
-# Project API Documentation
-Base URL: https://sim800l.maxapi.esp32.site
+# SIM800L ESP32 Calling Server - Complete API & Socket Protocol Documentation
 
-## 🌐 HTTP REST Endpoints
+Base URLs:
+- Local Development: `http://localhost:3000`
+- Production Primary: `https://800lcall.espserver.site`
+- Production Fallback: `https://sim800l.maxapi.esp32.site`
 
-1. `GET /`
-   - Purpose: Health check to ping the backend server.
-   - Example Response: `ESP32 SIM800L Backend Server is running!`
+---
 
-2. `POST /api/sms`
-   - Purpose: ESP32 or external source sends SMS data here to be saved into MongoDB.
-   - Example Payload: 
+## 🌐 1. HTTP REST Endpoints
+
+### 1.1 Core Server & Health Check
+- **`GET /`**
+  - **Purpose**: Health check to verify that the backend process is running and responsive.
+  - **Response**: `200 OK` — `ESP32 SIM800L Backend Server is running!`
+
+---
+
+### 1.2 Authentication & User Management (`/api/auth`)
+1. **`POST /api/auth/signup`**
+   - **Purpose**: Register a new user account. (The first registered user is automatically granted the `admin` role).
+   - **Request Body**:
      ```json
-     { 
-       "sender": "+8801700000000", 
-       "message": "Warning: Unauthorized entry detected.", 
-       "timestamp": "24/04/05,07:35:00+24" 
+     {
+       "username": "sarwar",
+       "email": "admin@sim800l.local",
+       "password": "SecurePassword123",
+       "role": "admin"
      }
      ```
-   - Example Response:
+   - **Response** (`201 Created`):
      ```json
      {
        "success": true,
-       "data": { "_id": "60a7c...", "sender": "+880...", ... }
+       "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+       "user": {
+         "id": "664fa8229a...",
+         "username": "sarwar",
+         "email": "admin@sim800l.local",
+         "role": "admin"
+       }
      }
      ```
 
-3. `GET /api/sms`
-   - Purpose: Fetch array of all stored SMS messages from MongoDB.
-   - Example Response:
+2. **`POST /api/auth/login`**
+   - **Purpose**: Authenticate user and receive JWT session token.
+   - **Request Body**:
+     ```json
+     {
+       "email": "admin@sim800l.local",
+       "password": "SecurePassword123"
+     }
+     ```
+   - **Response** (`200 OK`):
      ```json
      {
        "success": true,
-       "count": 1,
+       "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+       "user": {
+         "id": "664fa8229a...",
+         "username": "sarwar",
+         "email": "admin@sim800l.local",
+         "role": "admin",
+         "assignedDevices": ["44:1D:64:BD:22:EC"]
+       }
+     }
+     ```
+
+3. **`GET /api/auth/me`**
+   - **Purpose**: Validate active JWT token and retrieve current user session profile.
+   - **Headers**: `Authorization: Bearer <jwt_token>`
+   - **Response** (`200 OK`):
+     ```json
+     {
+       "success": true,
+       "user": {
+         "_id": "664fa8229a...",
+         "username": "sarwar",
+         "email": "admin@sim800l.local",
+         "role": "admin",
+         "status": "active",
+         "assignedDevices": ["44:1D:64:BD:22:EC"]
+       }
+     }
+     ```
+
+---
+
+### 1.3 Device Management & Fleet Registry (`/api/devices`)
+1. **`GET /api/devices`**
+   - **Purpose**: Fetch all registered ESP32 devices. Admins receive all devices; non-admin users receive only their assigned/shared devices.
+   - **Response** (`200 OK`):
+     ```json
+     {
+       "success": true,
        "data": [
          {
-           "_id": "664fa822",
-           "sender": "+8801700000000",
-           "message": "Hello",
-           "direction": "in",
-           "receivedAt": "2026-04-05T01:34:00.000Z"
+           "_id": "672de512...",
+           "mac": "44:1D:64:BD:22:EC",
+           "name": "North Field Pump Gateway",
+           "group": "Farm Main Cluster",
+           "allowedUsers": ["manager@sim800l.local"],
+           "registeredAt": "2026-11-01T08:00:00.000Z"
          }
        ]
      }
      ```
 
-4. `POST /api/broadcast`
-   - Purpose: Master route for initiating a voice call broadcast to multiple numbers. Queues `EspJob` child records targeting a specific `mac` address.
-   - Example Payload:
+2. **`POST /api/devices`**
+   - **Purpose**: Register a new ESP32 MAC address or update an existing device profile.
+   - **Request Body**:
      ```json
-     { 
-       "user_id": "user123", 
-       "mac": "24:0A:C4:AA:BB:CC",
-       "phone": "Main Office",
-       "phone_call_list": ["+8801711111111", "+8801922222222"], 
-       "payload": { "address": "Farm 3", "message": "Theft alarm", "audio": "0001" },
-       "response": [] 
+     {
+       "mac": "44:1D:64:BD:22:EC",
+       "name": "North Field Pump Gateway",
+       "group": "Farm Main Cluster",
+       "allowedUsers": ["manager@sim800l.local", "operator@sim800l.local"]
+     }
+     ```
+   - **Response** (`200 OK`):
+     ```json
+     {
+       "success": true,
+       "data": {
+         "mac": "44:1D:64:BD:22:EC",
+         "name": "North Field Pump Gateway",
+         "group": "Farm Main Cluster",
+         "allowedUsers": ["manager@sim800l.local", "operator@sim800l.local"]
+       }
      }
      ```
 
-5. `GET /api/jobs`
-   - Purpose: Fetch up to 100 recent broadcast call jobs (used by the dashboard).
+3. **`PUT /api/devices/:mac`**
+   - **Purpose**: Update device name, group, or sharing delegation.
+   - **Request Body**:
+     ```json
+     {
+       "name": "Updated Pump Gateway 1",
+       "group": "Sector B",
+       "allowedUsers": ["supervisor@sim800l.local"]
+     }
+     ```
+   - **Response** (`200 OK`): `{ "success": true, "data": { ... } }`
+
+4. **`DELETE /api/devices/:mac`**
+   - **Purpose**: Unregister and remove a device from the database (Admin only).
+   - **Response** (`200 OK`): `{ "success": true, "message": "Device removed" }`
 
 ---
 
-## ⚡ Socket.IO Events (Bidirectional Real-Time JSON)
+### 1.4 Voice Broadcasts & Call Queue (`/api/broadcast`, `/api/jobs`)
+1. **`POST /api/broadcast`**
+   - **Purpose**: Master route to queue automated phone calls across single or multiple numbers. The cluster load balancer automatically allocates pending calls to available ESP32 nodes.
+   - **Request Body**:
+     ```json
+     {
+       "user_id": "usr_mgr_01",
+       "mac": "44:1D:64:BD:22:EC",
+       "phone": "Admin Panel",
+       "phone_call_list": [
+         "+8801711111111",
+         "+8801722222222",
+         "+8801933333333"
+       ],
+       "payload": {
+         "address": "North Gate Sector",
+         "message": "Intrusion alarm triggered",
+         "audio": "0001"
+       },
+       "response": []
+     }
+     ```
+     *(Note: If `mac` is blank or omitted, jobs enter the floating pool for auto-distribution across all free modems).*
+   - **Response** (`201 Created`):
+     ```json
+     {
+       "success": true,
+       "message": "Broadcast saved & calls queued",
+       "data": { "_id": "672e0a...", "phone_call_list": [...] }
+     }
+     ```
 
-### 📌 Dashboard -> Server
-1. `dashboard_cmd_dial`
-   - Make the ESP32 dial a specific number immediately.
-   - Payload: `{ "mac": "24:0A:C4:AA:BB:CC", "phone": "+8801700000000" }`
-2. `dashboard_cmd_hangup`
-   - Hang up any ongoing calls.
-   - Payload: `{ "mac": "24:0A:C4:AA:BB:CC" }`
-3. `dashboard_cmd_ussd`
-   - Query balance/USSD codes.
-   - Payload: `{ "mac": "24:0A:C4:AA:BB:CC", "code": "*121#" }`
-4. `dashboard_send_sms`
-   - Sends a text message directly through the SIM800L.
-   - Payload: `{ "mac": "24:0A:C4:AA...", "phone": "+88017...", "message": "Test SMS" }`
-5. `dashboard_cmd_flightmode`
-   - Toggles minimum functionality.
-   - Payload: `{ "mac": "24:0A:C4:AA...", "state": true }`
-6. `dashboard_cmd_reboot`
-   - Reboots the ESP32.
-   - Payload: `{ "mac": "24:0A:C4:AA..." }`
+2. **`GET /api/jobs`**
+   - **Purpose**: Fetch up to 100 recent broadcast call jobs and their real-time execution states.
+   - **Query Parameters (Optional)**: `?limit=100&status=calling`
+   - **Response** (`200 OK`):
+     ```json
+     {
+       "success": true,
+       "data": [
+         {
+           "_id": "6aec23e68efb0306348d172f",
+           "mac": "44:1D:64:BD:22:EC",
+           "phone": "01731626274",
+           "audio": "0001",
+           "status": "calling",
+           "createdAt": "2026-11-05T06:36:22.515Z"
+         }
+       ]
+     }
+     ```
+   - **Possible Status Values**:
+     - `pending`: Queued, awaiting free ESP32 modem.
+     - `calling`: ESP32 currently dialing or in voice session.
+     - `success`: Call answered and completed successfully.
+     - `received`: Inbound or connected session acknowledged.
+     - `busy`: Recipient line returned busy tone (`+CRING: BUSY`).
+     - `number_off`: Recipient device switched off.
+     - `unreachable`: Mobile carrier reported out of coverage area.
+     - `hardware_error`: SIM800L serial timeout or network registration drop (triggers failover reassignment).
+     - `fail` / `failed`: General call execution failure.
 
-### 📌 Server -> Dashboard
-7. `telemetry_update`
-   - Live hardware status (relayed every 10 sec).
-   - Payload: `{ "mac": "24:0A:C4:AA", "ip": "192.168.1.10", "wifi_rssi": -55, "sim_operator": "Grameenphone", "sim_signal": "80%", "sim_number": "+8801..." }`
-8. `dashboard_cmd_result`
-   - Responses to manual commands (e.g., USSD balance return).
-   - Payload: `{ "type": "ussd", "data": "+CUSD: 0, \"Balance is 50.00 Tk\", 15" }`
-9. `sms_update`
-   - Informs dashboard that a new SMS was just saved in DB.
-   - Payload: `{ "type": "new_sms", "sms": { ... DB Object ... } }`
+---
 
-### 📌 ESP32 Hardware <-> Server
-10. `esp32_register` (Hardware -> Server)
-   - Payload: `{ "mac": "24:0A:C4:AA:BB:CC" }`
-11. `esp32_telemetry` (Hardware -> Server)
-   - Payload: Same as `telemetry_update`.
-12. `esptarget_cmd_*` events (Server -> Hardware)
-    - Routes `dashboard_cmd` triggers specifically to the mapped MAC address targeting the physical hardware. Includes `dial`, `hangup`, `ussd`, `sendsms`, `flightmode`, and `reboot`.
-13. `hardware_incoming_sms` (Hardware -> Server)
-    - Triggers instantly when SIM800L receives a new SMS text.
-    - Payload: `{ "sender": "+8801...", "message": "Hi Admin", "timestamp": "-" }`
-14. `execute_call` (Server -> Hardware)
-    - Dispatched by the job queue to instruct an ESP32 to start an automated call sequence. Includes target audio track for the DFPlayer Mini.
-    - Payload: `{ "job_id": "mongodb_id_123", "phone_to_call": "+8801700000000", "audio": "0001" }`
-15. `call_result` (Hardware -> Server)
-    - Sent by the ESP32 after an automated call attempt finishes to report the final status.
-    - Payload: `{ "job_id": "mongodb_id_123", "status": "success" }`
+### 1.5 SMS Messaging (`/api/sms`)
+1. **`POST /api/sms`**
+   - **Purpose**: Ingest SMS messages received by an ESP32 modem or third-party webhooks. Automatically handles raw ASCII and UCS2 hex Bengali strings.
+   - **Request Body**:
+     ```json
+     {
+       "sender": "+8801700000000",
+       "message": "Warning: Perimeter breach detected.",
+       "timestamp": "26/11/08,07:35:00+24"
+     }
+     ```
+   - **Response** (`201 Created`):
+     ```json
+     {
+       "success": true,
+       "data": {
+         "_id": "672e11...",
+         "sender": "+8801700000000",
+         "message": "Warning: Perimeter breach detected.",
+         "direction": "in",
+         "receivedAt": "2026-11-08T07:35:01.000Z"
+       }
+     }
+     ```
+
+2. **`GET /api/sms`**
+   - **Purpose**: Fetch all saved inbound and outbound SMS messages, sorted by newest first.
+   - **Response** (`200 OK`):
+     ```json
+     {
+       "success": true,
+       "count": 172,
+       "data": [
+         {
+           "_id": "6ae80d848efb0306348bcc33",
+           "sender": "GP",
+           "message": "আজ ৪৫মিনিট ৩৫টাকা ৭২ঘন্টা, ডায়াল *১২১*৫৮৩৫#",
+           "direction": "in",
+           "receivedAt": "2026-11-02T04:11:48.663Z"
+         }
+       ]
+     }
+     ```
+
+---
+
+### 1.6 ESP32 Hardware Polling Endpoints (HTTP Fallback)
+1. **`GET /api/esp32/pending-calls/:mac`**
+   - **Purpose**: Used when WebSockets are unavailable. The ESP32 polls this route to fetch the next queued call job for its MAC.
+   - **Response when job exists**:
+     ```json
+     {
+       "has_job": true,
+       "job_id": "6aec23e6...",
+       "phone_to_call": "+8801700000000"
+     }
+     ```
+   - **Response when queue is empty**:
+     ```json
+     {
+       "has_job": false,
+       "message": "No pending calls"
+     }
+     ```
+
+2. **`POST /api/esp32/call-result`**
+   - **Purpose**: ESP32 reports final call result over HTTP.
+   - **Request Body**:
+     ```json
+     {
+       "job_id": "6aec23e6...",
+       "status": "success"
+     }
+     ```
+   - **Response**: `{ "success": true, "message": "Result updated successfully" }`
+
+---
+
+## ⚡ 2. Real-Time Socket.IO Protocol
+
+Connection Endpoint: `ws://localhost:3000/socket.io/?EIO=4` (or WSS on remote domain).
+
+### 2.1 Dashboard -> Server (Controls & Triggers)
+1. **`dashboard_cmd_dial`**
+   - Instructs a specific ESP32 to dial an immediate manual voice call.
+   - **Payload**:
+     ```json
+     { "mac": "44:1D:64:BD:22:EC", "phone": "+8801700000000", "audio": "0001" }
+     ```
+
+2. **`dashboard_cmd_hangup`**
+   - Transmits `ATH` to terminate ongoing voice calls on the target modem.
+   - **Payload**:
+     ```json
+     { "mac": "44:1D:64:BD:22:EC" }
+     ```
+
+3. **`dashboard_cmd_ussd`**
+   - Sends an AT+CUSD command to check balance or dial carrier codes.
+   - **Payload**:
+     ```json
+     { "mac": "44:1D:64:BD:22:EC", "code": "*121#" }
+     ```
+
+4. **`dashboard_send_sms`**
+   - Directs the target SIM800L modem to transmit an outbound SMS.
+   - **Payload**:
+     ```json
+     {
+       "mac": "44:1D:64:BD:22:EC",
+       "phone": "+8801700000000",
+       "message": "Emergency Alert: System Activated."
+     }
+     ```
+
+5. **`dashboard_cmd_flightmode`**
+   - Toggles CFUN minimum functionality / sleep mode on the cellular radio.
+   - **Payload**:
+     ```json
+     { "mac": "44:1D:64:BD:22:EC", "state": true }
+     ```
+
+6. **`dashboard_cmd_reboot`**
+   - Dispatches a hardware soft reset command to the ESP32.
+   - **Payload**:
+     ```json
+     { "mac": "44:1D:64:BD:22:EC" }
+     ```
+
+---
+
+### 2.2 Server -> Dashboard (Live Updates)
+1. **`active_devices_update`**
+   - Broadcasts the full array of online ESP32 devices and metadata whenever a device joins, leaves, or updates.
+   - **Payload**: Array of enriched device objects (`mac`, `ip`, `status`, `name`, `group`, `allowedUsers`).
+
+2. **`telemetry_update`**
+   - Emits real-time vitals relayed from an individual hardware node (every 10 seconds).
+   - **Payload**:
+     ```json
+     {
+       "mac": "44:1D:64:BD:22:EC",
+       "ip": "192.168.1.105",
+       "wifi_rssi": -58,
+       "sim_operator": "Grameenphone",
+       "sim_signal": "88%",
+       "sim_number": "+8801731626274"
+     }
+     ```
+
+3. **`dashboard_cmd_result`**
+   - Returns responses from asynchronous hardware commands (such as carrier USSD text).
+   - **Payload**:
+     ```json
+     {
+       "type": "ussd",
+       "data": "+CUSD: 0, \"Your Balance is 45.20 Tk. Validity: 15-Dec-2026\", 15"
+     }
+     ```
+
+4. **`dashboard_update`**
+   - Emits when new call jobs are queued or when an active call changes status.
+   - **Payload**:
+     ```json
+     {
+       "type": "job_update",
+       "job": {
+         "_id": "6aec23e6...",
+         "phone": "+8801700000000",
+         "status": "success"
+       }
+     }
+     ```
+
+5. **`sms_update`**
+   - Real-time notification when a new SMS message is saved to MongoDB.
+   - **Payload**:
+     ```json
+     {
+       "type": "new_sms",
+       "sms": {
+         "_id": "672e11...",
+         "sender": "+8801700000000",
+         "message": "Pump turned ON",
+         "direction": "in"
+       }
+     }
+     ```
+
+---
+
+### 2.3 ESP32 Hardware <-> Server Communication
+1. **`esp32_register`** *(ESP32 -> Server)*
+   - Sent by firmware on initial boot to bind the socket connection to its physical MAC address.
+   - **Payload**: `{ "mac": "44:1D:64:BD:22:EC", "ip": "192.168.1.105" }`
+
+2. **`esp32_telemetry`** *(ESP32 -> Server)*
+   - Sent periodically every 10 seconds.
+   - **Payload**: Same as `telemetry_update`.
+
+3. **`execute_call`** *(Server -> ESP32)*
+   - Dispatched by the central load balancer instructing the ESP32 to start dialing. Includes optional audio prompt ID for the DFPlayer Mini.
+   - **Payload**:
+     ```json
+     {
+       "job_id": "6aec23e6...",
+       "phone_to_call": "+8801700000000",
+       "audio": "0001"
+     }
+     ```
+
+4. **`call_result`** *(ESP32 -> Server)*
+   - Sent by ESP32 immediately when a voice call terminates.
+   - **Payload**:
+     ```json
+     {
+       "job_id": "6aec23e6...",
+       "status": "success"
+     }
+     ```
+   - **Failover Handling**: If `status === 'hardware_error'`, the server automatically resets the job status to `pending`, unbinds the MAC, and reassigns it to the next available ESP32 modem.
+
+5. **`hardware_incoming_sms`** *(ESP32 -> Server)*
+   - Emits spontaneously when the SIM800L detects `+CMTI: "SM",X`.
+   - **Payload**:
+     ```json
+     {
+       "sender": "+8801700000000",
+       "message": "Power restored at station 3",
+       "timestamp": "26/11/08,07:35:00+24"
+     }
+     ```
+
+6. **`esptarget_cmd_*`** *(Server -> ESP32)*
+   - Targeted hardware execution events routed by MAC address:
+     - `esptarget_cmd_dial`
+     - `esptarget_cmd_hangup`
+     - `esptarget_cmd_ussd`
+     - `esptarget_cmd_sendsms`
+     - `esptarget_cmd_flightmode`
+     - `esptarget_cmd_reboot`
+
+---
+
+## 🔒 3. Error Codes & HTTP Status Responses
+
+| HTTP Status | Meaning | Typical Scenario |
+| :--- | :--- | :--- |
+| `200 OK` | Success | Request succeeded and data returned |
+| `201 Created` | Resource Created | SMS saved, broadcast queued, user signed up |
+| `400 Bad Request` | Validation Error | Missing required fields (`mac`, `phone`, `password`) |
+| `401 Unauthorized` | Auth Required | Missing or invalid JWT bearer token |
+| `403 Forbidden` | Access Denied | Standard user attempting admin-only action |
+| `404 Not Found` | Not Found | Target job ID or device MAC not found |
+| `500 Server Error` | Internal Error | Database connection drop or server exception |
+
+---
+
+## 🚀 4. Advanced Voice Routing, Virtual Devices & Queue Architecture
+
+### 4.1 Targeted Routing & Anonymous Caller ID Dispatch
+When queuing outbound calls or multi-number broadcasts, the dispatch engine supports precise destination routing and identity cloaking:
+1. **Specific Physical MAC Routing**:
+   - `mac`: `44:1D:64:BD:22:EC` forces execution through that exact hardware modem.
+2. **Virtual Device ID Routing**:
+   - `virtualId`: `VIR:CLUST:01` or `V-MAC:FF:EE:DD:01` routes through a bonded virtual gateway pool with automatic modem failover.
+3. **Anonymous / Cloaked Caller ID**:
+   - `isAnonymous`: `true`
+   - `anonymousId`: `ANON-CLOAK-8812`
+   - Automatically prefixes GSM private CLI dialing sequence (`ATD#31#017XXXXXXXX;`) and masks caller identity across all public reports and dashboards.
+
+### 4.2 Zero-Drop FIFO Priority Queue under Heavy Server Load
+- When all SIM800L modems are engaged or system load exceeds threshold, incoming call requests are safely held in a persistent FIFO queue (`status: 'queued'`).
+- Each request receives a `queuePosition`.
+- As channels free up, requests are dequeued automatically in FIFO order.
+- In case of busy tone or carrier waiting, an exponential backoff retry worker retries up to 3 times, guaranteeing **Zero-Drop reliability**.
+
+### 4.3 Virtual Address Talk Time Tracking
+Every Virtual Device maintains:
+- `virtualMac`: Dedicated unique address (e.g. `V-MAC:FF:EE:DD:01`, `VIR:VIP:02`)
+- `totalCallDurationSeconds`: Cumulative talk time in minutes and seconds across all bonded sessions
+- `lastCallDurationSeconds`: Duration of the most recent completed voice call
+- `totalCallCount`: Total completed calls handled
+- `totalSmsCount`: Total SMS dispatched through this virtual address
+
+### 4.4 Carrier Signaling & Telco Feedback Codes
+Instead of generic failures, SIM800L AT parsing accurately detects:
+- `success`: Call answered and connected, audio track prompt played to completion.
+- `rejected`: Handset user actively rejected the call (Telco User Determined User Busy `UDUB` / Release Cause 17).
+- `call_waiting`: Call waiting tone detected (Target handset on active call with Call Waiting enabled `CW`).
+- `forwarded`: Diverted to subscriber voicemail or secondary forward number.
+- `busy`: Network line engaged (Standard busy tone).
+- `unreachable`: Switched off, out of network coverage, or subscriber barred.
+
