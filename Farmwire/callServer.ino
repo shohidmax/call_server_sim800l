@@ -1084,6 +1084,7 @@ void setup() {
   Serial.println("[IOc] Initializing Cloud Socket.IO connection...");
   Serial.print("[IOc] Active Cloud Server: https://"); Serial.println(currentHost);
   lastSocketDisconnectTime = millis();
+  socketIO.setReconnectInterval(5000); // Built-in non-blocking reconnect every 5s
   socketIO.beginSSL(currentHost.c_str(), 443, "/socket.io/?EIO=4");
   socketIO.onEvent(socketIOEvent);
 }
@@ -1205,14 +1206,6 @@ void loop() {
   if (needInitialTelemetry && isSocketConnected) {
     needInitialTelemetry = false;
     sendTelemetry();
-  }
-
-  // Auto-reconnect to currentHost if disconnected for > 15s (Single host, no backup failover)
-  if (!isSocketConnected && (millis() - lastSocketDisconnectTime > 15000)) {
-    Serial.printf("[IOc] Reconnecting to: %s (SSL Port 443)...\n", currentHost.c_str());
-    socketIO.disconnect();
-    socketIO.beginSSL(currentHost.c_str(), 443, "/socket.io/?EIO=4");
-    lastSocketDisconnectTime = millis();
   }
 
   // Handle LED based on WiFi status
