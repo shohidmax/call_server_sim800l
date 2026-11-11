@@ -47,7 +47,7 @@ export default function Navbar({ onOpenQuickDial }: { onOpenQuickDial?: () => vo
                 >
                   <span className="w-2 h-2 rounded-full bg-success-content animate-pulse"></span>
                   <span className="font-mono">
-                    {activeServerUrl.includes('800lcall') ? '800lcall.espserver' : (activeServerUrl.includes('localhost') ? 'Localhost:3000' : 'Cloud Server')}
+                    {activeServerUrl.includes('800lcall') ? '800lcall.espserver' : (activeServerUrl.includes('maxapi') ? 'sim800l.maxapi' : (activeServerUrl.includes('localhost') ? 'Localhost:3000' : 'Cloud Server'))}
                   </span>
                 </div>
               ) : (
@@ -68,6 +68,14 @@ export default function Navbar({ onOpenQuickDial }: { onOpenQuickDial?: () => vo
                   className={activeServerUrl.includes('800lcall') ? 'active font-bold text-primary' : ''}
                 >
                   🌐 Cloud Server (800lcall.espserver.site)
+                </button>
+              </li>
+              <li>
+                <button 
+                  onClick={() => switchServer('https://sim800l.maxapi.esp32.site')} 
+                  className={activeServerUrl.includes('maxapi') ? 'active font-bold text-success' : ''}
+                >
+                  ⚡ maxapi VPS (sim800l.maxapi.esp32.site)
                 </button>
               </li>
               <li>

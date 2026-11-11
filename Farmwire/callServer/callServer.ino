@@ -1093,6 +1093,35 @@ void loop() {
   // Handle incoming web client requests
   server.handleClient();
 
+  // Handle Serial commands from USB/Serial Monitor (e.g. SET_HOST:url, GET_HOST, STATUS, REBOOT)
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    if (cmd.startsWith("SET_HOST:")) {
+      String newHost = cleanHost(cmd.substring(9));
+      if (newHost.length() > 3) {
+        mainHost = newHost;
+        currentHost = newHost;
+        Preferences p;
+        p.begin("server_cfg", false);
+        p.putString("host", mainHost);
+        p.end();
+        Serial.println("\n[CONFIG] Host updated via Serial to: " + currentHost);
+        isSocketConnected = false;
+        needRegister = false;
+        socketIO.disconnect();
+        socketIO.beginSSL(currentHost.c_str(), 443, "/socket.io/?EIO=4");
+      }
+    } else if (cmd.equalsIgnoreCase("GET_HOST")) {
+      Serial.println("\n[HOST] Current Host: " + currentHost + " (Connected: " + String(isSocketConnected ? "YES" : "NO") + ")");
+    } else if (cmd.equalsIgnoreCase("STATUS")) {
+      Serial.println("\n[STATUS] IP: " + WiFi.localIP().toString() + " | Host: " + currentHost + " | Socket: " + String(isSocketConnected ? "ONLINE" : "OFFLINE"));
+    } else if (cmd.equalsIgnoreCase("REBOOT")) {
+      Serial.println("\n[SYSTEM] Rebooting ESP32...");
+      ESP.restart();
+    }
+  }
+
   // Mirror any unsolicited data from SIM800L to Serial Monitor & Buffer Live
   // SMS
   while (sim800l.available()) {
