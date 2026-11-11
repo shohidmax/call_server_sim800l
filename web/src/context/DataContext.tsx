@@ -777,19 +777,18 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     setBehaviorLogs(prev => [newLog, ...prev.slice(0, 99)]);
   };
 
-  // Host configuration: Main Cloud Server, Secondary Backup, and Local Development
-  const MAIN_HOST = process.env.NEXT_PUBLIC_MAIN_SERVER || 'https://sim800l.maxapi.esp32.site';
-  const BACKUP_HOST = process.env.NEXT_PUBLIC_BACKUP_SERVER || 'https://sim800l.maxapi.esp32.site';
+  // Host configuration: Primary Cloud Server (https://800lcall.espserver.site) and Local Development
+  const MAIN_HOST = process.env.NEXT_PUBLIC_MAIN_SERVER || 'https://800lcall.espserver.site';
   const LOCAL_HOST = 'http://localhost:3000';
 
   const [activeServerUrl, setActiveServerUrl] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('sim800l_active_server');
-      // If user had previously stored localhost, auto-promote to live cloud cluster where ESP32 is registered
-      if (saved && saved !== LOCAL_HOST) return saved;
+      // If user had previously stored localhost or old server, auto-promote to 800lcall.espserver.site
+      if (saved && saved !== LOCAL_HOST && !saved.includes('maxapi')) return saved;
     }
-    // Default to BACKUP_HOST (sim800l.maxapi.esp32.site) where ESP32 cluster is actively registered
-    return BACKUP_HOST;
+    // Default to MAIN_HOST (https://800lcall.espserver.site)
+    return MAIN_HOST;
   });
 
   const switchServer = (newUrl: string) => {
@@ -880,21 +879,6 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         newSocket.on('connect_error', (err) => {
           connectErrors++;
           console.warn(`[Socket.IO] Connection error to ${host} (attempt ${connectErrors}):`, err.message);
-
-          // Failover triggered after 2 consecutive connection failures
-          if (connectErrors >= 2) {
-            connectErrors = 0;
-            let nextHost = host;
-            if (host === LOCAL_HOST) {
-              nextHost = MAIN_HOST;
-            } else if (host === MAIN_HOST) {
-              nextHost = BACKUP_HOST;
-            } else {
-              nextHost = MAIN_HOST;
-            }
-            console.warn(`[Socket.IO] Failover triggered! Switching active backend to: ${nextHost}`);
-            connectToHost(nextHost);
-          }
         });
 
         // Multi-device telemetry broadcast from server

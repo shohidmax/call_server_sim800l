@@ -713,12 +713,12 @@ export default function DeviceControlPage({ params }: { params: Promise<{ mac: s
                       <button
                         type="button"
                         onClick={() => {
-                          switchServer('https://sim800l.maxapi.esp32.site');
-                          setUssdResult('[Switched Cluster] Dashboard reconnected to https://sim800l.maxapi.esp32.site. Click "Send USSD" to execute!');
+                          switchServer('https://800lcall.espserver.site');
+                          setUssdResult('[Switched Cluster] Dashboard reconnected to https://800lcall.espserver.site. Click "Send USSD" to execute!');
                         }}
                         className="btn btn-xs btn-success text-white font-bold"
                       >
-                        ⚡ Switch to sim800l.maxapi.esp32.site
+                        ⚡ Switch to 800lcall.espserver.site
                       </button>
                     </div>
                   )}

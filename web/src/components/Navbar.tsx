@@ -47,7 +47,7 @@ export default function Navbar({ onOpenQuickDial }: { onOpenQuickDial?: () => vo
                 >
                   <span className="w-2 h-2 rounded-full bg-success-content animate-pulse"></span>
                   <span className="font-mono">
-                    {activeServerUrl.includes('maxapi') ? 'sim800l.maxapi (Cloud)' : (activeServerUrl.includes('800lcall') ? '800lcall (Main)' : 'Localhost:3000')}
+                    {activeServerUrl.includes('800lcall') ? '800lcall.espserver' : (activeServerUrl.includes('localhost') ? 'Localhost:3000' : 'Cloud Server')}
                   </span>
                 </div>
               ) : (
@@ -64,18 +64,10 @@ export default function Navbar({ onOpenQuickDial }: { onOpenQuickDial?: () => vo
               <li className="menu-title text-[10px] tracking-wider uppercase font-bold text-base-content/50">Cluster Server Routing</li>
               <li>
                 <button 
-                  onClick={() => switchServer('https://sim800l.maxapi.esp32.site')} 
-                  className={activeServerUrl.includes('maxapi') ? 'active font-bold text-emerald-600' : ''}
-                >
-                  🌐 Cloud Backup (sim800l.maxapi.esp32.site)
-                </button>
-              </li>
-              <li>
-                <button 
                   onClick={() => switchServer('https://800lcall.espserver.site')} 
                   className={activeServerUrl.includes('800lcall') ? 'active font-bold text-primary' : ''}
                 >
-                  🌐 Cloud Main (800lcall.espserver.site)
+                  🌐 Cloud Server (800lcall.espserver.site)
                 </button>
               </li>
               <li>

@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
 #include "DFRobotDFPlayerMini.h"
+#include <Preferences.h>    // NVS storage for persistent host configuration
 
 
 // --- PIN DEFINITIONS ---
@@ -28,16 +29,15 @@ WebServer server(80);
 bool isSimBusy = false; // Prevents command collisions
 
 // --- BACKEND SERVER SETTINGS ---
-// Primary cloud cluster host: sim800l.maxapi.esp32.site (active, healthy)
-String mainHost = "sim800l.maxapi.esp32.site";
-String backupHost = "sim800l.maxapi.esp32.site";
+// Default cloud cluster host: 800lcall.espserver.site (always default)
+const char* DEFAULT_HOST = "800lcall.espserver.site";
+String mainHost = DEFAULT_HOST;
 String currentHost = mainHost;
 bool isSocketConnected = false;
 bool needInitialTelemetry = false;
 bool needRegister = false;
 unsigned long registerWaitTime = 0;
 unsigned long lastSocketDisconnectTime = 0;
-const unsigned long socketFailoverTimeout = 35000; // 35 seconds
 int connectionFailures = 0;
 String macAddress = "";
 
@@ -100,6 +100,21 @@ const char index_html[] PROGMEM = R"rawliteral(
     <div class="network-status" id="network_status">
         📡 Operator: <span id="operator_name" style="color:#2980b9">Loading...</span> | 
         📶 Signal: <span id="signal_strength" style="color:#27ae60">--%</span>
+    </div>
+
+    <!-- Cloud Backend Host Configuration Section -->
+    <div class="section" style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px; margin-bottom: 20px;">
+        <label style="color: #1e293b; font-size: 13px; font-weight: bold; margin-bottom: 4px;">🌐 Backend Cloud Host URL (Socket.IO)</label>
+        <div style="font-size: 12px; color: #475569; margin-bottom: 8px; line-height: 1.4;">
+            Active Host: <b id="current_host_display" style="color: #0284c7; word-break: break-all;">https://800lcall.espserver.site</b><br>
+            Socket Status: <span id="socket_conn_badge" style="display:inline-block; margin-top:3px; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:bold; background:#fef3c7; color:#92400e;">Checking...</span>
+        </div>
+        <input type="text" id="custom_host_input" placeholder="e.g. https://800lcall.espserver.site" value="https://800lcall.espserver.site" style="margin-bottom: 8px;">
+        <div class="btn-group">
+            <button class="btn-call" onclick="saveHostConfig()" style="background-color: #0284c7; font-size: 14px; padding: 10px;">💾 Save & Connect</button>
+            <button class="btn-hangup" onclick="resetDefaultHost()" style="background-color: #64748b; font-size: 14px; padding: 10px;">↺ Default</button>
+        </div>
+        <div id="host_status_box" class="status-box"></div>
     </div>
 
     <!-- Voice Call Section -->
@@ -269,16 +284,86 @@ const char index_html[] PROGMEM = R"rawliteral(
             .catch(err => console.log("Status fetch error"));
     }
 
-    // Fetch network status on load and every 5 seconds
+    function fetchHostConfig() {
+        fetch('/getHost')
+            .then(response => response.json())
+            .then(data => {
+                const full = data.fullUrl || ('https://' + data.host);
+                document.getElementById('current_host_display').innerText = full;
+                const input = document.getElementById('custom_host_input');
+                if (!input.dataset.userEdited) {
+                    input.value = full;
+                }
+                const badge = document.getElementById('socket_conn_badge');
+                if (data.connected) {
+                    badge.innerText = 'Connected (Online)';
+                    badge.style.backgroundColor = '#dcfce7';
+                    badge.style.color = '#15803d';
+                } else {
+                    badge.innerText = 'Connecting / Disconnected';
+                    badge.style.backgroundColor = '#fee2e2';
+                    badge.style.color = '#b91c1c';
+                }
+            })
+            .catch(err => console.log("Host fetch error"));
+    }
+
+    function saveHostConfig() {
+        const input = document.getElementById('custom_host_input').value.trim();
+        if(!input) { alert("Please enter a valid host URL!"); return; }
+        const box = document.getElementById('host_status_box');
+        box.style.display = 'block';
+        box.innerText = "Saving host URL to ESP32 flash memory...";
+
+        fetch('/setHost?host=' + encodeURIComponent(input))
+            .then(response => response.text())
+            .then(msg => {
+                box.innerText = msg;
+                const inputElem = document.getElementById('custom_host_input');
+                delete inputElem.dataset.userEdited;
+                setTimeout(fetchHostConfig, 1200);
+            })
+            .catch(err => {
+                box.innerText = "Error: Could not reach ESP32 to update host.";
+            });
+    }
+
+    function resetDefaultHost() {
+        const def = "https://800lcall.espserver.site";
+        const inputElem = document.getElementById('custom_host_input');
+        inputElem.value = def;
+        delete inputElem.dataset.userEdited;
+        saveHostConfig();
+    }
+
+    // Fetch network & host status on load and periodically
     window.onload = () => {
+        document.getElementById('custom_host_input').addEventListener('input', function() {
+            this.dataset.userEdited = "true";
+        });
         fetchNetworkStatus();
+        fetchHostConfig();
         setInterval(fetchNetworkStatus, 5000);
+        setInterval(fetchHostConfig, 4000);
     };
 </script>
 
 </body>
 </html>
 )rawliteral";
+
+// Helper function: clean input URLs (strip http://, https://, paths, ports)
+String cleanHost(String raw) {
+  raw.trim();
+  if (raw.startsWith("https://")) raw = raw.substring(8);
+  else if (raw.startsWith("http://")) raw = raw.substring(7);
+  int slashIdx = raw.indexOf('/');
+  if (slashIdx != -1) raw = raw.substring(0, slashIdx);
+  int colonIdx = raw.indexOf(':');
+  if (colonIdx != -1) raw = raw.substring(0, colonIdx);
+  raw.trim();
+  return raw;
+}
 
 // --- HELPER FUNCTION: Execute USSD with Session Reply Support & Complete Response Extraction ---
 String executeUSSD(String code) {
@@ -924,6 +1009,52 @@ void setup() {
     server.send(200, "application/json", jsonResponse);
   });
 
+  // Route: Get current backend host and socket status
+  server.on("/getHost", HTTP_GET, []() {
+    String json = "{\"host\":\"" + currentHost + "\",\"fullUrl\":\"https://" + currentHost + "\",\"connected\":" + (isSocketConnected ? "true" : "false") + "}";
+    server.send(200, "application/json", json);
+  });
+
+  // Route: Set new backend host URL (persists in NVS Preferences)
+  auto handleSetHost = []() {
+    String newHostRaw = "";
+    if (server.hasArg("host")) {
+      newHostRaw = server.arg("host");
+    } else if (server.hasArg("plain")) {
+      newHostRaw = server.arg("plain");
+    }
+
+    String cleaned = cleanHost(newHostRaw);
+    if (cleaned.length() < 3) {
+      server.send(400, "text/plain", "Invalid host! Example: https://800lcall.espserver.site");
+      return;
+    }
+
+    mainHost = cleaned;
+    currentHost = cleaned;
+
+    // Save permanently to flash NVS
+    Preferences prefs;
+    prefs.begin("server_cfg", false);
+    prefs.putString("host", mainHost);
+    prefs.end();
+
+    Serial.println("\n[CONFIG] Host URL updated via ESP32 Dashboard to: " + currentHost);
+
+    // Reconnect Socket.IO to the new host
+    isSocketConnected = false;
+    needRegister = false;
+    socketIO.disconnect();
+    socketIO.beginSSL(currentHost.c_str(), 443, "/socket.io/?EIO=4");
+    lastSocketDisconnectTime = millis();
+    connectionFailures = 0;
+
+    server.send(200, "text/plain", "Success: Saved to ESP32 Flash memory! Reconnecting to https://" + currentHost);
+  };
+
+  server.on("/setHost", HTTP_GET, handleSetHost);
+  server.on("/setHost", HTTP_POST, handleSetHost);
+
   // Start the server
   server.begin();
 
@@ -936,11 +1067,22 @@ void setup() {
   sim800l.println("AT+CNMI=2,2,0,0,0"); // Deliver SMS immediately directly on serial
   delay(100);
 
-  // 5. Initialize Socket.IO connection with Cloud Main/Backup Failover
+  // 5. Load saved host configuration from ESP32 Flash memory (Preferences/NVS)
+  Preferences prefs;
+  prefs.begin("server_cfg", true);
+  String savedHost = prefs.getString("host", DEFAULT_HOST);
+  prefs.end();
+
+  if (savedHost.length() > 0) {
+    mainHost = cleanHost(savedHost);
+  } else {
+    mainHost = DEFAULT_HOST;
+  }
+  currentHost = mainHost;
+
+  // Initialize Socket.IO connection (Single host: 800lcall.espserver.site, no backup)
   Serial.println("[IOc] Initializing Cloud Socket.IO connection...");
-  Serial.print("[IOc] Primary Cloud Server: "); Serial.println(mainHost);
-  Serial.print("[IOc] Secondary Backup Server: "); Serial.println(backupHost);
-  Serial.print("[IOc] Connecting to: "); Serial.println(currentHost);
+  Serial.print("[IOc] Active Cloud Server: https://"); Serial.println(currentHost);
   lastSocketDisconnectTime = millis();
   socketIO.beginSSL(currentHost.c_str(), 443, "/socket.io/?EIO=4");
   socketIO.onEvent(socketIOEvent);
@@ -1065,15 +1207,12 @@ void loop() {
     sendTelemetry();
   }
 
-  // Failover Check Mechanism: Auto switch between mainHost and backupHost if disconnected repeatedly for > 35s
-  if (!isSocketConnected && (millis() - lastSocketDisconnectTime > socketFailoverTimeout) && connectionFailures >= 3) {
-    Serial.printf("[IOc] Host %s failed %d times. Failover triggered! Switching server...\n", currentHost.c_str(), connectionFailures);
+  // Auto-reconnect to currentHost if disconnected for > 15s (Single host, no backup failover)
+  if (!isSocketConnected && (millis() - lastSocketDisconnectTime > 15000)) {
+    Serial.printf("[IOc] Reconnecting to: %s (SSL Port 443)...\n", currentHost.c_str());
     socketIO.disconnect();
-    currentHost = (currentHost == mainHost) ? backupHost : mainHost;
-    Serial.printf("[IOc] Switching target host to: %s (SSL Port 443)\n", currentHost.c_str());
     socketIO.beginSSL(currentHost.c_str(), 443, "/socket.io/?EIO=4");
     lastSocketDisconnectTime = millis();
-    connectionFailures = 0;
   }
 
   // Handle LED based on WiFi status
