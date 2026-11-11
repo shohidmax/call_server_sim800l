@@ -164,6 +164,21 @@ JWT_EXPIRES_IN=7d
 
 ---
 
+### Milestone 11: Single Cloud Host Consolidation & Socket.IO v4 Pure WebSocket Transport
+- **Permanent Cloud Host (`https://800lcall.espserver.site`)**:
+  - Eliminated legacy dual-host/backup-failover logic; `https://800lcall.espserver.site` is now the sole, permanent production cloud bridge.
+  - Dynamic host reconfiguration remains supported through ESP32 local web interface (`http://<esp_ip>/save_host`) and Serial command (`SET_HOST=<domain>`), stored non-volatile in ESP32 Preferences/NVS.
+- **Socket.IO v4 Direct WebSocket Upgrade Protocol**:
+  - Replaced legacy polling-upgrade (`transport=polling` followed by `2probe/5`) with direct WebSocket transport (`transport=websocket&EIO=4`).
+  - Resolved RFC 6455 frame corruption: fixed HTTP 101 header boundary in `WebSocketsClient.cpp` to prevent the WebSocket frame (`0{"sid":...}`) from being misread as an HTTP response body.
+  - Resolved Cloudflare WAF block: injected compliant `User-Agent: Mozilla/5.0 (ESP32)` without creating trailing duplicate `\r\n\r\n` lines in the HTTP upgrade request.
+  - Implemented exact Socket.IO v4 handshake sequence in `SocketIOclient.cpp`: client receives Engine.IO packet `0` -> responds with Socket.IO packet `40` -> receives Socket.IO ACK `40{"sid":...}` -> triggers `sIOtype_CONNECT` -> dispatches `42["esp32_register", ...]`.
+- **Live Verification**:
+  - Device `44:1D:64:BD:22:EC` (`maxit`) remains continuously online with 0 disconnections.
+  - Full end-to-end command loop verified via live USSD inquiry (`*2#`) returning carrier MSISDN in < 2 seconds.
+
+---
+
 ## 🔒 4. Backward Compatibility & System Health
 - **ESP32 Firmware Compatibility**: Maintained 100% backwards compatibility for `esp32_register`, `esp32_telemetry`, `execute_call`, and `call_result`.
 - **Active Runtimes**:

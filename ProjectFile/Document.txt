@@ -36,7 +36,7 @@
 |             DATABASE (MongoDB Atlas)              |      |       ESP32 HARDWARE NODES (SIM800L)   |
 |  - Users (Credentials, Roles, Assigned Devices)   |      |  - SIM800L 2G/GPRS Cellular Modem      |
 |  - DeviceProfiles (MAC, Name, Groups, Allowed)    |      |  - DFPlayer Mini (Audio Track Prompts) |
-|  - VirtualDevices (Virtual MACs, Talk Time Stats) |      |  - Auto-Failover Dual-Host Socket.IO   |
+|  - VirtualDevices (Virtual MACs, Talk Time Stats) |      |  - Direct Cloud Socket.IO v4 (WSS 443)|
 |  - EspJobs (Queue, Carrier Feedback, Attempts)    |      |  - Local Captive Portal & AP Fallback  |
 |  - Campaigns (Voice, SMS, Hybrid, Scheduled)      |      |  - Live Mic / Browser WebRTC Audio Hook|
 |  - SMS Messages (Inbound, Outbound, UCS2 Bengali) |      +----------------------------------------+
@@ -314,12 +314,12 @@ Click-to-copy functionality is deployed across all 20 views:
 
 ---
 
-## 12. High-Availability Server Infrastructure & Automatic Failover
-The platform operates an automatic dual-host high-availability architecture across both hardware nodes and frontend web portals:
-- **Primary Main Server**: `800lcall.espserver.site` (Secure SSL WebSocket port 443)
-- **Secondary Backup Server**: `sim800l.maxapi.esp32.site` (Secure SSL WebSocket port 443 with instant failover)
-- **Hardware Watchdog**: ESP32 firmware monitors connection vitality; if the primary endpoint is unresponsive for more than 20 seconds or encounters handshake/SSL errors, it automatically fails over to the secondary endpoint.
-- **Web Portal Resilience**: The Next.js frontend and standalone dashboard maintain persistent telemetry via Socket.IO with multi-server failover, dynamically routing API calls to whichever node is online and healthy.
+## 12. Direct Cloud Server Infrastructure (Single Production Host)
+The platform operates a streamlined, high-speed single cloud host architecture across hardware nodes and frontend web portals:
+- **Permanent Cloud Server**: `https://800lcall.espserver.site` (Secure SSL WebSocket port 443 with Cloudflare edge acceleration)
+- **Direct Socket.IO v4 Pure WebSocket Transport**: Uses pure `&transport=websocket&EIO=4` protocol, bypassing HTTP polling roundtrips and providing instant event dispatch.
+- **Dynamic Host Reconfiguration**: ESP32 firmware supports on-the-fly cloud host re-pointing via the onboard web server (`http://<esp_ip>/save_host`) and USB Serial command (`SET_HOST=<domain>`). The active host is stored non-volatile in ESP32 Preferences/NVS and persists across reboots.
+- **Auto-Reconnect Watchdog**: ESP32 firmware monitors connection vitality; if a network blip occurs, the built-in non-blocking auto-reconnect engine reconnects to `800lcall.espserver.site` every 5 seconds without freezing modem operations or blocking calls.
 
 ---
 

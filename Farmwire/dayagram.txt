@@ -1,0 +1,75 @@
+================================================================================
+       ESP32 + SIM800L + DFPLAYER MINI + AUDIO CIRCUIT & WIRING DIAGRAM
+================================================================================
+
+                               +-------------------+
+                               | 5V 2A-3A DC Power |
+                               |   Supply Unit     |
+                               +---+-----------+---+
+                                   |           |
+                              +----+           +----+
+                              | VCC (+)        | GND (-)
+                              v                v
+                       +--------------+  +--------------+
+                       | LM2596 / DC  |  | Common GND   |
+                       | Buck (4.0V)  |  | Rail Bus     |
+                       +-------+------+  +-------+------+
+                               |                 |
+       +-----------------------+                 |
+       | 4.0V (Peak 2A)                          |
+       v                                         v
++---------------+                        +---------------+
+|    SIM800L    |                        |  ESP32 Board  |
+|               |                        |  (30/38 Pin)  |
+| VCC           |<-- (4.0V from Buck)    |               |
+| GND           |<---------------------->| GND           |
+| TXD           |----------------------->| GPIO 16 (RX2) |
+| RXD           |<--[ 1kΩ / 2kΩ Div ]<---| GPIO 17 (TX2) |
+| MICP / MICN   |<--[ 100nF Audio Cap ]<-| GPIO 25 (DAC) |
+| SPKP / SPKN   |---[ Voltage Div 3.3V]->| GPIO 34 (ADC) |
+| NET / ANT     |---[ Helical Antenna ]  | GPIO 2 (LED)  |
++---------------+                        +-------+-------+
+                                                 |
+                                 +---------------+---------------+
+                                 | GPIO 14 (RX1) | GPIO 27 (TX1) |
+                                 +-------+---------------+-------+
+                                         |               |
+                                         v               v (via 1k resistor)
+                                 +---------------+---------------+
+                                 |      TX       |      RX       |
+                                 |                               |
+                                 |         DFPLAYER MINI         |
+                                 |                               |
+                                 | VCC (5V/3.3V) | GND (Common)  |
+                                 | SPK_1 / SPK_2 | MicroSD Card  |
+                                 +---------------+---------------+
+                                         |
+                                         v
+                                 +---------------+
+                                 | 8Ω 0.5W / 3W  |
+                                 | Mini Speaker  |
+                                 +---------------+
+
+================================================================================
+                              DETAILED PINOUT TABLE
+================================================================================
+Module           Pin Name         Connects To           Note
+--------------------------------------------------------------------------------
+SIM800L          VCC              Buck Conv (4.0V-4.2V) Requires 2A peak current
+SIM800L          GND              Common GND Bus        Crucial for noise immunity
+SIM800L          TXD              ESP32 GPIO 16 (RX2)   Standard 3.3V UART
+SIM800L          RXD              ESP32 GPIO 17 (TX2)   Use 1k/2k divider or 3.3V shifter
+SIM800L          MICP             ESP32 GPIO 25 (DAC)   Via 100nF (0.1µF) decoupling cap
+SIM800L          MICN             Audio GND (Common)    Clean audio ground reference
+SIM800L          SPKP             ESP32 GPIO 34 (ADC)   Via 100nF cap + 3.3V divider
+SIM800L          SPKN             Common GND Bus        Speaker negative terminal
+--------------------------------------------------------------------------------
+DFPlayer Mini    VCC              5V or 3.3V Power      Clean supply rail
+DFPlayer Mini    GND              Common GND Bus        System ground
+DFPlayer Mini    TX               ESP32 GPIO 14 (RX1)   Status response line
+DFPlayer Mini    RX               ESP32 GPIO 27 (TX1)   Serial command (use 1k series)
+DFPlayer Mini    SPK_1 / SPK_2    External Speaker      Or line-out to SIM800L MIC
+--------------------------------------------------------------------------------
+ESP32 Status     GPIO 2           Onboard Blue LED      Blinks idle, solid connected
+ESP32 Power      VIN (5V)         5V Rail / USB         ESP32 power input
+================================================================================
