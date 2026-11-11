@@ -613,7 +613,7 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload,
                    size_t length) {
   switch (type) {
   case sIOtype_DISCONNECT:
-    Serial.printf("[IOc] Disconnected from: %s\n", currentHost.c_str());
+    Serial.printf("[IOc] Disconnected from: %s (Reason: %s)\n", currentHost.c_str(), payload ? (char*)payload : "none");
     isSocketConnected = false;
     needRegister = false;
     connectionFailures++;
@@ -634,8 +634,7 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload,
     lastSocketDisconnectTime = 0;
     connectionFailures = 0;
 
-    // In Socket.IO v4, send CONNECT packet to join default namespace "/"
-    socketIO.send(sIOtype_CONNECT, "/");
+    // Socket.IO v4 connection ready, schedule registration
     needRegister = true;
     registerWaitTime = millis();
     break;
@@ -879,6 +878,8 @@ void setup() {
 
   // 2. WiFiManager Initialization
   WiFiManager wm;
+  wm.setConnectTimeout(40);       // Allow up to 40s to negotiate DHCP with dual-band router
+  wm.setConfigPortalTimeout(120);  // 2 minute timeout for config portal
 
   // Uncomment the line below to erase saved WiFi credentials (for testing)
   // wm.resetSettings();
@@ -1075,7 +1076,7 @@ void setup() {
     isSocketConnected = false;
     needRegister = false;
     socketIO.disconnect();
-    socketIO.beginSSL(currentHost.c_str(), 443, "/socket.io/?EIO=4");
+    socketIO.beginSSL(currentHost.c_str(), 443, "/socket.io/?EIO=4", "");
     lastSocketDisconnectTime = millis();
     connectionFailures = 0;
 
@@ -1115,7 +1116,7 @@ void setup() {
   Serial.print("[IOc] Active Cloud Server: https://"); Serial.println(currentHost);
   lastSocketDisconnectTime = millis();
   socketIO.setReconnectInterval(5000); // Built-in non-blocking reconnect every 5s
-  socketIO.beginSSL(currentHost.c_str(), 443, "/socket.io/?EIO=4");
+  socketIO.beginSSL(currentHost.c_str(), 443, "/socket.io/?EIO=4", "");
   socketIO.onEvent(socketIOEvent);
 }
 
@@ -1140,7 +1141,7 @@ void loop() {
         isSocketConnected = false;
         needRegister = false;
         socketIO.disconnect();
-        socketIO.beginSSL(currentHost.c_str(), 443, "/socket.io/?EIO=4");
+        socketIO.beginSSL(currentHost.c_str(), 443, "/socket.io/?EIO=4", "");
       }
     } else if (cmd.equalsIgnoreCase("GET_HOST")) {
       Serial.println("\n[HOST] Current Host: " + currentHost + " (Connected: " + String(isSocketConnected ? "YES" : "NO") + ")");
