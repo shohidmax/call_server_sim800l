@@ -12,88 +12,6 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 const PORT = process.env.PORT || 3000;
 
-// --- CLOUD CLUSTER BRIDGE ---
-// Only runs if explicitly enabled via CLOUD_CLUSTER_URL (prevents infinite loop if deployed to cloud)
-const CLOUD_BRIDGE_URL = process.env.CLOUD_CLUSTER_URL;
-let cloudBridgeSocket = null;
-
-function initCloudClusterBridge() {
-    if (!CLOUD_BRIDGE_URL) {
-        console.log('🌐 Standalone cluster node: Cloud Bridge disabled (no CLOUD_CLUSTER_URL specified).');
-        return;
-    }
-    try {
-        console.log(`🌐 Initializing Cloud Cluster Bridge to: ${CLOUD_BRIDGE_URL}`);
-        cloudBridgeSocket = ioClient(CLOUD_BRIDGE_URL, {
-            transports: ['websocket', 'polling'],
-            timeout: 5000,
-            reconnection: true,
-            reconnectionAttempts: Infinity,
-            reconnectionDelay: 3000
-        });
-
-        cloudBridgeSocket.on('connect', () => {
-            console.log(`✅ Cloud Cluster Bridge CONNECTED to: ${CLOUD_BRIDGE_URL}`);
-        });
-
-        cloudBridgeSocket.on('disconnect', () => {
-            console.log(`⚠️ Cloud Cluster Bridge disconnected from ${CLOUD_BRIDGE_URL}`);
-        });
-
-        // Mirror active device telemetry from cloud safely without triggering cascading storms
-        cloudBridgeSocket.on('active_devices_update', (devices) => {
-            if (Array.isArray(devices)) {
-                let updated = false;
-                devices.forEach(d => {
-                    if (!connectedESP32s.has(d.mac)) {
-                        const existing = activeDeviceTelemetry.get(d.mac) || {};
-                        activeDeviceTelemetry.set(d.mac, { 
-                            ...existing, 
-                            ...d, 
-                            isCloudNode: true,
-                            lastSeen: d.lastSeen || Date.now()
-                        });
-                        updated = true;
-                    }
-                });
-                if (updated) {
-                    io.emit('active_devices_update', Array.from(activeDeviceTelemetry.values()));
-                }
-            }
-        });
-
-        cloudBridgeSocket.on('telemetry_update', (data) => {
-            if (data && data.mac && !connectedESP32s.has(data.mac)) {
-                const existing = activeDeviceTelemetry.get(data.mac) || {};
-                activeDeviceTelemetry.set(data.mac, { 
-                    ...existing, 
-                    ...data, 
-                    isCloudNode: true,
-                    lastSeen: Date.now()
-                });
-                io.emit('telemetry_update', data);
-            }
-        });
-
-        // Mirror command results (USSD, reboot, dial, etc.) from cloud
-        cloudBridgeSocket.on('dashboard_cmd_result', (data) => {
-            console.log(`📡 [Cloud Bridge] Relaying cmd_result to local dashboard:`, data);
-            io.emit('dashboard_cmd_result', data);
-        });
-
-        cloudBridgeSocket.on('sms_update', (data) => {
-            io.emit('sms_update', data);
-        });
-
-        cloudBridgeSocket.on('connect_error', (err) => {
-            console.warn(`⚠️ Cloud Cluster Bridge connect warning:`, err.message);
-        });
-    } catch (e) {
-        console.warn(`⚠️ Could not init Cloud Cluster Bridge:`, e.message);
-    }
-}
-initCloudClusterBridge();
-
 // Socket.IO Logic
 const connectedESP32s = new Map();
 const activeDeviceTelemetry = new Map(); // Store latest telemetry for each MAC
@@ -167,22 +85,19 @@ io.on('connection', (socket) => {
     });
 
     // --- MANUAL CONTROL EVENTS (Dashboard -> ESP32) ---
-    const relayToESP = (mac, eventName, payload, dashboardEvent) => {
+    const relayToESP = (mac, eventName, payload) => {
         const espSocketId = connectedESP32s.get(mac);
         if (espSocketId) {
             io.to(espSocketId).emit(eventName, payload);
             console.log(`📡 Relayed ${eventName} locally to ESP32 MAC ${mac}`);
-        } else if (cloudBridgeSocket && cloudBridgeSocket.connected) {
-            console.log(`🌐 Device ${mac} not local; forwarding ${dashboardEvent || eventName} via Cloud Cluster Bridge to ${CLOUD_BRIDGE_URL}`);
-            cloudBridgeSocket.emit(dashboardEvent || eventName, payload);
         } else {
-            console.log(`⚠️ Failed to relay ${eventName}. ESP32 MAC ${mac} offline and Cloud Bridge disconnected.`);
+            console.log(`⚠️ Failed to relay ${eventName}. ESP32 MAC ${mac} is currently offline.`);
             if (eventName === 'esptarget_cmd_ussd') {
                 socket.emit('dashboard_cmd_result', {
                     mac,
                     type: 'ussd',
                     code: payload?.code,
-                    data: `[Error: Device Offline] Device (${mac}) is offline on this server and Cloud Bridge is unreachable.`
+                    data: `[Error: Device Offline] Device (${mac}) is currently offline. Please verify power and WiFi connection.`
                 });
             }
         }
@@ -386,28 +301,21 @@ setInterval(() => {
     const now = Date.now();
     for (const [mac, dev] of activeDeviceTelemetry.entries()) {
         const isSocketAlive = connectedESP32s.has(mac);
-        if (dev.status === 'online') {
-            // Keep cloud nodes online as long as the cloud bridge is alive or recent telemetry received
-            if (dev.isCloudNode) {
-                if (cloudBridgeSocket && cloudBridgeSocket.connected) {
-                    if (!dev.lastSeen || (now - dev.lastSeen < 120000)) {
-                        continue;
-                    }
-                }
-            }
-            if (!isSocketAlive && !dev.isCloudNode) {
-                if (!dev.lastSeen || (now - dev.lastSeen > 35000)) {
+        if (dev.status === 'online' || dev.status === 'busy') {
+            if (!isSocketAlive) {
+                if (!dev.lastSeen || (now - dev.lastSeen > 20000)) {
                     dev.status = 'offline';
                     dev.lastOffline = dev.lastSeen || now;
                     changed = true;
-                    console.log(`⏱️ Watchdog: Local device ${mac} inactive. Marked OFFLINE.`);
+                    console.log(`⏱️ Watchdog: Device ${mac} socket closed. Marked OFFLINE.`);
                     io.emit('telemetry_update', { mac, status: 'offline', lastOffline: dev.lastOffline });
                 }
-            } else if (dev.lastSeen && (now - dev.lastSeen > 90000)) {
+            } else if (dev.lastSeen && (now - dev.lastSeen > 120000)) {
                 dev.status = 'offline';
                 dev.lastOffline = dev.lastSeen;
+                connectedESP32s.delete(mac);
                 changed = true;
-                console.log(`⏱️ Watchdog: Device ${mac} unresponsive for >90s. Marked OFFLINE at ${new Date(dev.lastOffline).toISOString()}.`);
+                console.log(`⏱️ Watchdog: Device ${mac} unresponsive for >120s. Marked OFFLINE at ${new Date(dev.lastOffline).toISOString()}.`);
                 io.emit('telemetry_update', { mac, status: 'offline', lastOffline: dev.lastOffline });
             }
         }

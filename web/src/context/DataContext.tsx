@@ -784,10 +784,9 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const [activeServerUrl, setActiveServerUrl] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('sim800l_active_server');
-      // If user had previously stored localhost or old server, auto-promote to 800lcall.espserver.site
-      if (saved && saved !== LOCAL_HOST && !saved.includes('maxapi')) return saved;
+      if (saved === LOCAL_HOST) return LOCAL_HOST;
     }
-    // Default to MAIN_HOST (https://800lcall.espserver.site)
+    // Always default to MAIN_HOST (https://800lcall.espserver.site)
     return MAIN_HOST;
   });
 

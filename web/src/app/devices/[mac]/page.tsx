@@ -677,8 +677,8 @@ export default function DeviceControlPage({ params }: { params: Promise<{ mac: s
                   <Terminal className="w-4 h-4 text-primary" /> USSD Balance & Inquiries
                 </h3>
                 <div className="flex items-center gap-1.5">
-                  <span className={`badge badge-xs font-mono font-bold ${activeServerUrl.includes('maxapi') ? 'badge-success text-white' : 'badge-ghost'}`}>
-                    {activeServerUrl.includes('maxapi') ? 'sim800l.maxapi' : (activeServerUrl.includes('800lcall') ? '800lcall' : 'Localhost')}
+                  <span className="badge badge-xs font-mono font-bold badge-success text-white">
+                    {activeServerUrl.includes('800lcall') ? '800lcall' : 'Localhost'}
                   </span>
                   <span className="text-[10px] font-mono text-base-content/50">AT+CUSD</span>
                 </div>
@@ -709,29 +709,17 @@ export default function DeviceControlPage({ params }: { params: Promise<{ mac: s
                   </div>
                   {ussdResult && ussdResult.includes('Device Offline') && (
                     <div className="mt-3 pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-[10px] text-amber-400">Current Node: {activeServerUrl}</span>
-                      <div className="flex gap-1.5 flex-wrap">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            switchServer('https://sim800l.maxapi.esp32.site');
-                            setUssdResult('[Switched Cluster] Dashboard reconnected to https://sim800l.maxapi.esp32.site. Click "Send USSD" to execute!');
-                          }}
-                          className="btn btn-xs btn-success text-white font-bold"
-                        >
-                          ⚡ Switch to maxapi VPS
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            switchServer('https://800lcall.espserver.site');
-                            setUssdResult('[Switched Cluster] Dashboard reconnected to https://800lcall.espserver.site. Click "Send USSD" to execute!');
-                          }}
-                          className="btn btn-xs btn-primary text-white font-bold"
-                        >
-                          🌐 800lcall Cloud
-                        </button>
-                      </div>
+                      <span className="text-[10px] text-amber-400">Server Node: {activeServerUrl}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          switchServer('https://800lcall.espserver.site');
+                          setUssdResult('[Reconnected] Reconnected to https://800lcall.espserver.site. Click "Send USSD" to execute!');
+                        }}
+                        className="btn btn-xs btn-primary text-white font-bold"
+                      >
+                        🌐 Reconnect to 800lcall.espserver.site
+                      </button>
                     </div>
                   )}
                 </div>

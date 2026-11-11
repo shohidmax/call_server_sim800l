@@ -529,38 +529,65 @@ String sendATCommand(String cmd, uint32_t timeout) {
   return response;
 }
 
+// Global cached network info for fast, non-blocking telemetry
+String cachedOpName = "GrameenPhone";
+String cachedSigStr = "80%";
+unsigned long lastNetworkScanTime = 0;
+
 // --- HELPER FUNCTION: Send Tracking Telemetry ---
 void sendTelemetry() {
-  if (isSimBusy || WiFi.status() != WL_CONNECTED)
+  if (WiFi.status() != WL_CONNECTED || !isSocketConnected)
     return;
 
-  isSimBusy = true; // Briefly lock to prevent call collision
-
-  // 1. Get Operator Name (AT+COPS?)
-  String opName = "Searching...";
-  String copsRes = sendATCommand("AT+COPS?", 1500);
-  int startQuote = copsRes.indexOf('"');
-  int endQuote = copsRes.indexOf('"', startQuote + 1);
-  if (startQuote != -1 && endQuote != -1) {
-    opName = copsRes.substring(startQuote + 1, endQuote);
+  // If SIM is busy (on a call or executing USSD), send instant lightweight heartbeat
+  // so server knows ESP32 is actively working and does NOT mark it offline
+  if (isSimBusy) {
+    DynamicJsonDocument doc(256);
+    JsonArray array = doc.to<JsonArray>();
+    array.add("esp32_telemetry");
+    JsonObject payload = array.createNestedObject();
+    payload["mac"] = macAddress;
+    payload["ip"] = WiFi.localIP().toString();
+    payload["wifi_rssi"] = WiFi.RSSI();
+    payload["sim_operator"] = cachedOpName;
+    payload["sim_signal"] = cachedSigStr;
+    payload["sim_number"] = simPhoneNumber;
+    payload["status"] = "busy";
+    String output;
+    serializeJson(doc, output);
+    socketIO.sendEVENT(output);
+    return;
   }
 
-  // 2. Get Signal Strength (AT+CSQ)
-  String sigStr = "0%";
-  String csqRes = sendATCommand("AT+CSQ", 1500);
-  int csqIdx = csqRes.indexOf("+CSQ: ");
-  if (csqIdx != -1) {
-    int commaIdx = csqRes.indexOf(',', csqIdx);
-    if (commaIdx != -1) {
-      int csqVal = csqRes.substring(csqIdx + 6, commaIdx).toInt();
-      if (csqVal == 99)
-        sigStr = "No Signal";
-      else
-        sigStr = String((csqVal * 100) / 31) + "%";
+  // Run full AT modem scan every 30s to keep SIM800L serial line clean and responsive
+  if (millis() - lastNetworkScanTime >= 30000 || lastNetworkScanTime == 0) {
+    lastNetworkScanTime = millis();
+    isSimBusy = true;
+
+    // 1. Get Operator Name (AT+COPS?)
+    String copsRes = sendATCommand("AT+COPS?", 1500);
+    int startQuote = copsRes.indexOf('"');
+    int endQuote = copsRes.indexOf('"', startQuote + 1);
+    if (startQuote != -1 && endQuote != -1) {
+      cachedOpName = copsRes.substring(startQuote + 1, endQuote);
     }
-  }
 
-  isSimBusy = false;
+    // 2. Get Signal Strength (AT+CSQ)
+    String csqRes = sendATCommand("AT+CSQ", 1500);
+    int csqIdx = csqRes.indexOf("+CSQ: ");
+    if (csqIdx != -1) {
+      int commaIdx = csqRes.indexOf(',', csqIdx);
+      if (commaIdx != -1) {
+        int csqVal = csqRes.substring(csqIdx + 6, commaIdx).toInt();
+        if (csqVal == 99)
+          cachedSigStr = "No Signal";
+        else
+          cachedSigStr = String((csqVal * 100) / 31) + "%";
+      }
+    }
+
+    isSimBusy = false;
+  }
 
   // Emit to socket
   DynamicJsonDocument doc(256);
@@ -571,8 +598,8 @@ void sendTelemetry() {
   payload["mac"] = macAddress;
   payload["ip"] = WiFi.localIP().toString();
   payload["wifi_rssi"] = WiFi.RSSI();
-  payload["sim_operator"] = opName;
-  payload["sim_signal"] = sigStr;
+  payload["sim_operator"] = cachedOpName;
+  payload["sim_signal"] = cachedSigStr;
   payload["sim_number"] = simPhoneNumber;
   payload["status"] = "online";
 
@@ -729,6 +756,9 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload,
         unsigned long lastClccPoll = millis();
 
         while (millis() - callStart < 60000 && callOngoing) {
+          socketIO.loop();       // Keeps WebSocket alive & responds to ping/pong during calls
+          server.handleClient(); // Keeps local IP web server responsive
+
           while (sim800l.available()) {
             char c = sim800l.read();
             simResponse += c;
